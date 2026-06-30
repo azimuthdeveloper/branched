@@ -300,12 +300,13 @@ class RealGitService implements GitService {
 
     final args = [
       'log',
+      '--all',
+      '--date-order',
       '--format=$format',
       '--skip=$offset',
       '-n',
       '$limit',
     ];
-    if (branch != null) args.add(branch);
 
     final result = await _run(args, workingDirectory: repo.path, allowFailure: true);
     if (result.exitCode != 0) return [];
