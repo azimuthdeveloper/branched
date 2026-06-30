@@ -12,11 +12,15 @@ import 'package:branched/features/sidebar/sidebar_bloc.dart';
 import 'package:branched/features/sidebar/sidebar.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:branched/git_engine/mock_git_service.dart';
+import 'package:branched/core/file_picker_service.dart';
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
-    setupLocator();
+    locator.registerLazySingleton<GitService>(() => MockGitService());
+    locator.registerLazySingleton<FilePickerService>(() => TestFilePickerService());
   });
 
   testWidgets('Integration Test - Branching, Merging, and Conflict resolution flows', (WidgetTester tester) async {
@@ -59,15 +63,8 @@ void main() {
     await capture('01_welcome_screen');
 
     // 2. Open repository
-    // Click Open Repository Card
+    // Click Open Repository Card (triggers mocked FilePickerService to return /root/my-project)
     await tester.tap(find.text('Open Repository'));
-    await tester.pumpAndSettle();
-
-    // Verify Open Dialog
-    expect(find.text('Local Path'), findsOneWidget);
-    
-    // Tap Open button
-    await tester.tap(find.text('Open'));
     await tester.pumpAndSettle(const Duration(seconds: 1));
 
     // 3. Verify Workspace renders
@@ -111,4 +108,11 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 1));
     await capture('06_flow_complete');
   });
+}
+
+class TestFilePickerService implements FilePickerService {
+  @override
+  Future<String?> getDirectoryPath({String? dialogTitle}) async {
+    return '/root/my-project';
+  }
 }

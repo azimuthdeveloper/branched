@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../core/theme.dart';
+import '../../core/locator.dart';
+import '../../core/file_picker_service.dart';
 import 'repository_manager_bloc.dart';
 
 class WelcomeScreen extends StatelessWidget {
@@ -53,7 +56,7 @@ class WelcomeScreen extends StatelessWidget {
                       icon: Icons.folder_open,
                       title: 'Open Repository',
                       subtitle: 'Open an existing local Git repository',
-                      onTap: () => _showOpenRepoDialog(context),
+                      onTap: () => _openRepository(context),
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -74,7 +77,7 @@ class WelcomeScreen extends StatelessWidget {
                 icon: Icons.create_new_folder,
                 title: 'Create New Repository',
                 subtitle: 'Initialize a brand new Git repository',
-                onTap: () => _showInitRepoDialog(context),
+                onTap: () => _initRepository(context),
               ),
               const SizedBox(height: 40),
 
@@ -204,46 +207,18 @@ class WelcomeScreen extends StatelessWidget {
     );
   }
 
-  void _showOpenRepoDialog(BuildContext context) {
-    final controller = TextEditingController(text: '/root/my-project');
-    showDialog(
-      context: context,
-      builder: (diagContext) {
-        return AlertDialog(
-          backgroundColor: FurcateTheme.darkBgSecondary,
-          title: const Text('Open Repository', style: TextStyle(fontSize: 16)),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'Local Path',
-              labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(diagContext),
-              child: const Text('Cancel', style: TextStyle(color: FurcateTheme.darkTextSecondary)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: FurcateTheme.darkAccent),
-              onPressed: () {
-                final path = controller.text.trim();
-                if (path.isNotEmpty) {
-                  context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(path));
-                }
-                Navigator.pop(diagContext);
-              },
-              child: const Text('Open'),
-            ),
-          ],
-        );
-      },
+  void _openRepository(BuildContext context) async {
+    final selectedDir = await locator<FilePickerService>().getDirectoryPath(
+      dialogTitle: 'Open Git Repository',
     );
+    if (selectedDir == null) return; // User cancelled
+    if (!context.mounted) return;
+    context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(selectedDir));
   }
 
   void _showCloneRepoDialog(BuildContext context) {
-    final urlController = TextEditingController(text: 'https://github.com/mock/repo.git');
-    final pathController = TextEditingController(text: '/root/my-cloned-repo');
+    final urlController = TextEditingController();
+    final pathController = TextEditingController();
 
     showDialog(
       context: context,
@@ -258,16 +233,36 @@ class WelcomeScreen extends StatelessWidget {
                 controller: urlController,
                 decoration: const InputDecoration(
                   labelText: 'Remote URL',
+                  hintText: 'https://github.com/user/repo.git',
                   labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
                 ),
               ),
               const SizedBox(height: 8),
-              TextField(
-                controller: pathController,
-                decoration: const InputDecoration(
-                  labelText: 'Local Path',
-                  labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: pathController,
+                      decoration: const InputDecoration(
+                        labelText: 'Local Path',
+                        labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.folder_open, color: FurcateTheme.darkAccent),
+                    tooltip: 'Browse...',
+                    onPressed: () async {
+                      final dir = await locator<FilePickerService>().getDirectoryPath(
+                        dialogTitle: 'Select Clone Destination',
+                      );
+                      if (dir != null) {
+                        pathController.text = dir;
+                      }
+                    },
+                  ),
+                ],
               ),
             ],
           ),
@@ -282,7 +277,7 @@ class WelcomeScreen extends StatelessWidget {
                 final url = urlController.text.trim();
                 final path = pathController.text.trim();
                 if (url.isNotEmpty && path.isNotEmpty) {
-                  context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(path));
+                  context.read<RepositoryManagerBloc>().add(CloneRepositoryEvent(url, path));
                 }
                 Navigator.pop(diagContext);
               },
@@ -294,40 +289,12 @@ class WelcomeScreen extends StatelessWidget {
     );
   }
 
-  void _showInitRepoDialog(BuildContext context) {
-    final controller = TextEditingController(text: '/root/new-empty-repo');
-    showDialog(
-      context: context,
-      builder: (diagContext) {
-        return AlertDialog(
-          backgroundColor: FurcateTheme.darkBgSecondary,
-          title: const Text('Initialize Repository', style: TextStyle(fontSize: 16)),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'Directory Path',
-              labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(diagContext),
-              child: const Text('Cancel', style: TextStyle(color: FurcateTheme.darkTextSecondary)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: FurcateTheme.darkAccent),
-              onPressed: () {
-                final path = controller.text.trim();
-                if (path.isNotEmpty) {
-                  context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(path));
-                }
-                Navigator.pop(diagContext);
-              },
-              child: const Text('Initialize'),
-            ),
-          ],
-        );
-      },
+  void _initRepository(BuildContext context) async {
+    final selectedDir = await locator<FilePickerService>().getDirectoryPath(
+      dialogTitle: 'Select Directory to Initialize',
     );
+    if (selectedDir == null) return; // User cancelled
+    if (!context.mounted) return;
+    context.read<RepositoryManagerBloc>().add(InitRepositoryEvent(selectedDir));
   }
 }

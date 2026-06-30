@@ -18,22 +18,13 @@ class ToolbarWidget extends StatefulWidget {
 
 class _ToolbarWidgetState extends State<ToolbarWidget> {
   bool _isSyncing = false;
-  double _syncProgress = 0.0;
   String _syncPhase = '';
 
   void _triggerSync(String action, Future<void> Function() syncCall) async {
     setState(() {
       _isSyncing = true;
-      _syncProgress = 0.0;
       _syncPhase = '$action...';
     });
-
-    for (var i = 1; i <= 5; i++) {
-      await Future.delayed(const Duration(milliseconds: 250));
-      setState(() {
-        _syncProgress = i / 5;
-      });
-    }
 
     try {
       await syncCall();
@@ -131,13 +122,12 @@ class _ToolbarWidgetState extends State<ToolbarWidget> {
                     style: const TextStyle(fontSize: 11, color: FurcateTheme.darkTextSecondary),
                   ),
                   const SizedBox(width: 12),
-                  SizedBox(
+                  const SizedBox(
                     width: 100,
                     height: 4,
                     child: LinearProgressIndicator(
-                      value: _syncProgress,
                       backgroundColor: FurcateTheme.darkBorder,
-                      valueColor: const AlwaysStoppedAnimation(FurcateTheme.darkAccent),
+                      valueColor: AlwaysStoppedAnimation(FurcateTheme.darkAccent),
                     ),
                   ),
                 ],

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../core/theme.dart';
+import '../../core/locator.dart';
+import '../../core/file_picker_service.dart';
 import '../repository_manager/repository_manager_bloc.dart';
 
 class WindowChrome extends StatelessWidget {
@@ -110,13 +113,18 @@ class WindowChrome extends StatelessWidget {
                 ),
               ),
 
-              // Plus button to open/clone repo
+              // Plus button to open repo via native directory picker
               IconButton(
                 icon: const Icon(Icons.add, size: 18, color: FurcateTheme.darkTextPrimary),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
-                onPressed: () {
-                  _showOpenRepoDialog(context);
+                onPressed: () async {
+                  final selectedDir = await locator<FilePickerService>().getDirectoryPath(
+                    dialogTitle: 'Open Git Repository',
+                  );
+                  if (selectedDir == null) return; // User cancelled
+                  if (!context.mounted) return;
+                  context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(selectedDir));
                 },
               ),
               const SizedBox(width: 8),
@@ -143,43 +151,6 @@ class WindowChrome extends StatelessWidget {
         color: color.withOpacity(0.85),
         shape: BoxShape.circle,
       ),
-    );
-  }
-
-  void _showOpenRepoDialog(BuildContext context) {
-    final controller = TextEditingController(text: '/root/my-project');
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: FurcateTheme.darkBgSecondary,
-          title: const Text('Open / Init Git Repository', style: TextStyle(fontSize: 16)),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'Directory Path',
-              labelStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: FurcateTheme.darkTextSecondary)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: FurcateTheme.darkAccent),
-              onPressed: () {
-                final path = controller.text.trim();
-                if (path.isNotEmpty) {
-                  context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(path));
-                }
-                Navigator.pop(context);
-              },
-              child: const Text('Open'),
-            ),
-          ],
-        );
-      },
     );
   }
 }

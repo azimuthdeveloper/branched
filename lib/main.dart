@@ -39,7 +39,7 @@ class FurcateApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider<RepositoryManagerBloc>(
-      create: (context) => RepositoryManagerBloc(locator<GitService>()),
+      create: (context) => RepositoryManagerBloc(locator<GitService>())..add(const LoadRecentReposEvent()),
       child: MaterialApp(
         title: 'Furcate',
         theme: FurcateTheme.darkTheme,

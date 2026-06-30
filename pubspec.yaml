@@ -52,6 +52,7 @@ dependencies:
   re_highlight: ^0.0.3
   get_it: ^9.2.1
   intl: ^0.20.3
+  file_picker: ^8.0.0
 
 dev_dependencies:
   flutter_test:
