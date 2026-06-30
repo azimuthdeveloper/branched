@@ -15,6 +15,14 @@ class CommitGraphWidget extends StatefulWidget {
 
 class _CommitGraphWidgetState extends State<CommitGraphWidget> {
   final _searchController = TextEditingController();
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,18 +53,24 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
                       builder: (context, constraints) {
                         return Stack(
                           children: [
-                            // Custom Painter for Graph in background
+                            // Scrollable CustomPaint in background (synchronized scroll)
                             Positioned(
                               left: 0,
                               top: 0,
                               bottom: 0,
                               width: 120,
                               child: IgnorePointer(
-                                child: CustomPaint(
-                                  size: Size(120, state.visibleCommits.length * 28.0),
-                                  painter: CommitGraphPainter(
-                                    commits: state.visibleCommits,
-                                    rowHeight: 28.0,
+                                child: ClipRect(
+                                  child: SingleChildScrollView(
+                                    controller: _scrollController,
+                                    physics: const NeverScrollableScrollPhysics(), // Handled by ListView
+                                    child: CustomPaint(
+                                      size: Size(120, state.visibleCommits.length * 28.0),
+                                      painter: CommitGraphPainter(
+                                        commits: state.visibleCommits,
+                                        rowHeight: 28.0,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -64,6 +78,7 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
 
                             // ListView for Text columns
                             ListView.builder(
+                              controller: _scrollController,
                               itemCount: state.visibleCommits.length,
                               itemExtent: 28.0,
                               itemBuilder: (context, index) {
