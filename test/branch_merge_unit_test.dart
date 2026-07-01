@@ -237,6 +237,24 @@ class TestMockGitService implements GitService {
   Future<void> abortMerge(GitRepo repo) async {}
 
   @override
+  Future<void> rebase(GitRepo repo, String branch) async {}
+
+  @override
+  Future<void> continueRebase(GitRepo repo) async {}
+
+  @override
+  Future<void> abortRebase(GitRepo repo) async {}
+
+  @override
+  Future<void> cherryPick(GitRepo repo, String sha) async {}
+
+  @override
+  Future<void> revertCommit(GitRepo repo, String sha) async {}
+
+  @override
+  Future<void> reset(GitRepo repo, String sha, {required String mode}) async {}
+
+  @override
   Future<List<RemoteEntity>> getRemotes(GitRepo repo) async => [];
 
   @override

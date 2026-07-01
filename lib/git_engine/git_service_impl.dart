@@ -933,6 +933,36 @@ class RealGitService implements GitService {
     await _run(['merge', '--abort'], workingDirectory: repo.path);
   }
 
+  @override
+  Future<void> rebase(GitRepo repo, String branch) async {
+    await _run(['rebase', branch], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> continueRebase(GitRepo repo) async {
+    await _run(['rebase', '--continue'], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> abortRebase(GitRepo repo) async {
+    await _run(['rebase', '--abort'], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> cherryPick(GitRepo repo, String sha) async {
+    await _run(['cherry-pick', sha], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> revertCommit(GitRepo repo, String sha) async {
+    await _run(['revert', sha], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> reset(GitRepo repo, String sha, {required String mode}) async {
+    await _run(['reset', '--$mode', sha], workingDirectory: repo.path);
+  }
+
   // ---------------------------------------------------------------------------
   // Remotes
   // ---------------------------------------------------------------------------

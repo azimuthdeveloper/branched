@@ -386,6 +386,24 @@ class MockGitService implements GitService {
   }
 
   @override
+  Future<void> rebase(GitRepo repo, String branch) async {}
+
+  @override
+  Future<void> continueRebase(GitRepo repo) async {}
+
+  @override
+  Future<void> abortRebase(GitRepo repo) async {}
+
+  @override
+  Future<void> cherryPick(GitRepo repo, String sha) async {}
+
+  @override
+  Future<void> revertCommit(GitRepo repo, String sha) async {}
+
+  @override
+  Future<void> reset(GitRepo repo, String sha, {required String mode}) async {}
+
+  @override
   Future<List<RemoteEntity>> getRemotes(GitRepo repo) async {
     return _getOrCreateState(repo).remotes;
   }
@@ -504,6 +522,27 @@ class MockGitService implements GitService {
     await applyStash(repo, index);
     await dropStash(repo, index);
   }
+
+  @override
+  Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo) async => [
+        const SubmoduleEntity(
+          name: 'plugins/my_plugin',
+          path: 'plugins/my_plugin',
+          url: 'https://github.com/example/my_plugin.git',
+          sha: 'abc123abc123abc123abc123abc123abc123abc1',
+          status: SubmoduleStatus.clean,
+          isInitialized: true,
+        ),
+      ];
+
+  @override
+  Future<void> initSubmodules(GitRepo repo) async {}
+
+  @override
+  Future<void> updateSubmodules(GitRepo repo) async {}
+
+  @override
+  Future<void> syncSubmodules(GitRepo repo) async {}
 
   String _randomSha() {
     final r = Random();

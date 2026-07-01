@@ -47,6 +47,12 @@ abstract class GitService {
   // Merge / Rebase
   Future<void> merge(GitRepo repo, String sourceBranch);
   Future<void> abortMerge(GitRepo repo);
+  Future<void> rebase(GitRepo repo, String branch);
+  Future<void> continueRebase(GitRepo repo);
+  Future<void> abortRebase(GitRepo repo);
+  Future<void> cherryPick(GitRepo repo, String sha);
+  Future<void> revertCommit(GitRepo repo, String sha);
+  Future<void> reset(GitRepo repo, String sha, {required String mode});
 
   // Remotes
   Future<List<RemoteEntity>> getRemotes(GitRepo repo);
