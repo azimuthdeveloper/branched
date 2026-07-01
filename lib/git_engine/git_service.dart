@@ -67,4 +67,10 @@ abstract class GitService {
   Future<void> applyStash(GitRepo repo, int index);
   Future<void> dropStash(GitRepo repo, int index);
   Future<void> popStash(GitRepo repo, int index);
+
+  // Submodule Operations
+  Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo);
+  Future<void> initSubmodules(GitRepo repo);
+  Future<void> updateSubmodules(GitRepo repo);
+  Future<void> syncSubmodules(GitRepo repo);
 }

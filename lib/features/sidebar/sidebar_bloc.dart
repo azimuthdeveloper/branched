@@ -47,6 +47,7 @@ class SidebarState extends Equatable {
   final List<BranchEntity> remoteBranches;
   final List<TagEntity> tags;
   final List<StashEntity> stashes;
+  final List<SubmoduleEntity> submodules;
   final SidebarItem selectedItem;
   final bool isLoading;
 
@@ -55,6 +56,7 @@ class SidebarState extends Equatable {
     this.remoteBranches = const [],
     this.tags = const [],
     this.stashes = const [],
+    this.submodules = const [],
     this.selectedItem = const SidebarItem(label: 'Changes', type: SidebarItemType.changes),
     this.isLoading = false,
   });
@@ -64,6 +66,7 @@ class SidebarState extends Equatable {
     List<BranchEntity>? remoteBranches,
     List<TagEntity>? tags,
     List<StashEntity>? stashes,
+    List<SubmoduleEntity>? submodules,
     SidebarItem? selectedItem,
     bool? isLoading,
   }) {
@@ -72,13 +75,14 @@ class SidebarState extends Equatable {
       remoteBranches: remoteBranches ?? this.remoteBranches,
       tags: tags ?? this.tags,
       stashes: stashes ?? this.stashes,
+      submodules: submodules ?? this.submodules,
       selectedItem: selectedItem ?? this.selectedItem,
       isLoading: isLoading ?? this.isLoading,
     );
   }
 
   @override
-  List<Object?> get props => [localBranches, remoteBranches, tags, stashes, selectedItem, isLoading];
+  List<Object?> get props => [localBranches, remoteBranches, tags, stashes, submodules, selectedItem, isLoading];
 }
 
 class SidebarBloc extends Bloc<SidebarEvent, SidebarState> {
@@ -92,12 +96,14 @@ class SidebarBloc extends Bloc<SidebarEvent, SidebarState> {
         final remote = await _gitService.getRemoteBranches(event.repo);
         final tags = await _gitService.getTags(event.repo);
         final stashes = await _gitService.getStashes(event.repo);
+        final submodules = await _gitService.getSubmodules(event.repo);
 
         emit(state.copyWith(
           localBranches: local,
           remoteBranches: remote,
           tags: tags,
           stashes: stashes,
+          submodules: submodules,
           isLoading: false,
         ));
       } catch (_) {

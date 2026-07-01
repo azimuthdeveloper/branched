@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/theme.dart';
+import '../../core/locator.dart';
 import '../../git_engine/git_models.dart';
+import '../../git_engine/git_service.dart';
+import '../repository_manager/repository_manager_bloc.dart';
 import 'sidebar_bloc.dart';
 
 class SidebarWidget extends StatefulWidget {
-  const SidebarWidget({super.key});
+  final GitRepo repo;
+  const SidebarWidget({super.key, required this.repo});
 
   @override
   State<SidebarWidget> createState() => _SidebarWidgetState();
@@ -15,6 +19,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
   final Map<String, bool> _isExpanded = {
     'Branches': true,
     'Remotes': true,
+    'Submodules': false,
     'Tags': false,
     'Stashes': false,
   };
@@ -84,6 +89,13 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                       ...state.remoteBranches
                           .where((b) => b.name.toLowerCase().contains(_filterQuery))
                           .map((b) => _buildBranchRow(b, state.selectedItem)),
+
+                    // Submodules section
+                    _buildSectionHeader('Submodules', badge: state.submodules.length),
+                    if (_isExpanded['Submodules']!)
+                      ...state.submodules
+                          .where((s) => s.name.toLowerCase().contains(_filterQuery))
+                          .map((s) => _buildSubmoduleRow(s, state.selectedItem)),
 
                     // Tags section
                     _buildSectionHeader('Tags', badge: state.tags.length),
@@ -288,6 +300,150 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                 'stash@{${stash.index}}: ${stash.message}',
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextPrimary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSubmoduleContextMenu(BuildContext context, TapDownDetails details, SubmoduleEntity submodule) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(details.globalPosition, details.globalPosition),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        const PopupMenuItem<String>(
+          value: 'init',
+          child: Text('Init Submodule', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuItem<String>(
+          value: 'update',
+          child: Text('Update Submodule', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuItem<String>(
+          value: 'sync',
+          child: Text('Sync Submodule', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'open',
+          child: Text('Open Submodule in New Tab', style: TextStyle(fontSize: 12)),
+        ),
+      ],
+    ).then((value) async {
+      if (value == null) return;
+
+      final gitService = locator<GitService>();
+      final sidebarBloc = context.read<SidebarBloc>();
+
+      try {
+        switch (value) {
+          case 'init':
+            await gitService.initSubmodules(widget.repo);
+            break;
+          case 'update':
+            await gitService.updateSubmodules(widget.repo);
+            break;
+          case 'sync':
+            await gitService.syncSubmodules(widget.repo);
+            break;
+          case 'open':
+            final absolutePath = '${widget.repo.path}/${submodule.path}';
+            if (mounted) {
+              context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(absolutePath));
+            }
+            break;
+        }
+
+        // Reload the sidebar after operation
+        sidebarBloc.add(LoadSidebarEvent(widget.repo));
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Submodule operation failed: $e')),
+          );
+        }
+      }
+    });
+  }
+
+  Widget _buildSubmoduleRow(SubmoduleEntity submodule, SidebarItem selectedItem) {
+    IconData statusIcon;
+    Color statusColor;
+    switch (submodule.status) {
+      case SubmoduleStatus.clean:
+        statusIcon = Icons.check_circle_outline;
+        statusColor = Colors.green;
+        break;
+      case SubmoduleStatus.modified:
+        statusIcon = Icons.warning_amber_rounded;
+        statusColor = Colors.orange;
+        break;
+      case SubmoduleStatus.uninitialized:
+        statusIcon = Icons.error_outline;
+        statusColor = Colors.red;
+        break;
+      case SubmoduleStatus.outOfDate:
+        statusIcon = Icons.sync;
+        statusColor = Colors.blue;
+        break;
+    }
+
+    return GestureDetector(
+      onSecondaryTapDown: (details) {
+        _showSubmoduleContextMenu(context, details, submodule);
+      },
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.only(left: 24, right: 4),
+        child: Row(
+          children: [
+            Icon(
+              statusIcon,
+              size: 13,
+              color: statusColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Tooltip(
+                message: 'Path: ${submodule.path}\nSHA: ${submodule.sha}\nURL: ${submodule.url}',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      submodule.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextPrimary, height: 1.1),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${submodule.sha.length >= 7 ? submodule.sha.substring(0, 7) : submodule.sha} • ${submodule.path}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 9, color: FurcateTheme.darkTextSecondary, height: 1.1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTapDown: (details) {
+                _showSubmoduleContextMenu(context, details, submodule);
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(
+                  Icons.more_vert,
+                  size: 14,
+                  color: FurcateTheme.darkTextSecondary,
+                ),
               ),
             ),
           ],

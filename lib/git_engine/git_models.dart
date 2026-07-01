@@ -248,3 +248,27 @@ class GraphNodeEntity extends Equatable {
   @override
   List<Object?> get props => [sha, laneIndex, connections, colorIndex];
 }
+
+enum SubmoduleStatus { clean, modified, uninitialized, outOfDate }
+
+class SubmoduleEntity extends Equatable {
+  final String name;
+  final String path;
+  final String url;
+  final String sha;
+  final SubmoduleStatus status;
+  final bool isInitialized;
+
+  const SubmoduleEntity({
+    required this.name,
+    required this.path,
+    required this.url,
+    required this.sha,
+    required this.status,
+    required this.isInitialized,
+  });
+
+  @override
+  List<Object?> get props => [name, path, url, sha, status, isInitialized];
+}
+

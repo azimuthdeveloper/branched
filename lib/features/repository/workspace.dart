@@ -67,7 +67,7 @@ class MainWorkspace extends StatelessWidget {
                 child: Row(
                   children: [
                     // Sidebar
-                    const SidebarWidget(),
+                    SidebarWidget(repo: repo),
 
                     const VerticalDivider(color: FurcateTheme.darkBorder, width: 1),
 

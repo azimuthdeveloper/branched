@@ -79,6 +79,18 @@ void main() {
       
       expect(conflictedFile.status, FileChangeStatus.conflicted);
     });
+
+    test('SidebarBloc loads submodules', () async {
+      final sidebarBloc = SidebarBloc(locator<GitService>());
+      sidebarBloc.add(LoadSidebarEvent(mockRepo));
+      await expectLater(
+        sidebarBloc.stream,
+        emitsThrough(predicate<SidebarState>((state) {
+          return !state.isLoading && 
+                 state.submodules.any((s) => s.name == 'plugins/my_plugin');
+        })),
+      );
+    });
   });
 }
 
@@ -265,4 +277,25 @@ class TestMockGitService implements GitService {
 
   @override
   Future<void> popStash(GitRepo repo, int index) async {}
+
+  @override
+  Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo) async => [
+        const SubmoduleEntity(
+          name: 'plugins/my_plugin',
+          path: 'plugins/my_plugin',
+          url: 'https://github.com/example/my_plugin.git',
+          sha: 'abc123abc123abc123abc123abc123abc123abc1',
+          status: SubmoduleStatus.clean,
+          isInitialized: true,
+        ),
+      ];
+
+  @override
+  Future<void> initSubmodules(GitRepo repo) async {}
+
+  @override
+  Future<void> updateSubmodules(GitRepo repo) async {}
+
+  @override
+  Future<void> syncSubmodules(GitRepo repo) async {}
 }

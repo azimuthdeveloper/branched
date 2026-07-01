@@ -1149,6 +1149,126 @@ class RealGitService implements GitService {
   Future<void> popStash(GitRepo repo, int index) async {
     await _run(['stash', 'pop', 'stash@{$index}'], workingDirectory: repo.path);
   }
+
+  // ---------------------------------------------------------------------------
+  // Submodule Operations
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, String>> _getSubmodulePaths(String repoPath) async {
+    final result = await _run(
+      ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
+      workingDirectory: repoPath,
+      allowFailure: true,
+    );
+    if (result.exitCode != 0) return {};
+    final lines = LineSplitter.split(result.stdout as String);
+    final map = <String, String>{}; // name -> path
+    for (final line in lines) {
+      final match = RegExp(r'^submodule\.(.+)\.path\s+(.+)$').firstMatch(line);
+      if (match != null) {
+        final name = match.group(1)!;
+        final path = match.group(2)!;
+        map[name] = path;
+      }
+    }
+    return map;
+  }
+
+  Future<Map<String, String>> _getSubmoduleUrls(String repoPath) async {
+    final result = await _run(
+      ['config', '--file', '.gitmodules', '--get-regexp', 'url'],
+      workingDirectory: repoPath,
+      allowFailure: true,
+    );
+    if (result.exitCode != 0) return {};
+    final lines = LineSplitter.split(result.stdout as String);
+    final map = <String, String>{}; // name -> url
+    for (final line in lines) {
+      final match = RegExp(r'^submodule\.(.+)\.url\s+(.+)$').firstMatch(line);
+      if (match != null) {
+        final name = match.group(1)!;
+        final url = match.group(2)!;
+        map[name] = url;
+      }
+    }
+    return map;
+  }
+
+  @override
+  Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo) async {
+    final statusResult = await _run(
+      ['submodule', 'status'],
+      workingDirectory: repo.path,
+      allowFailure: true,
+    );
+    if (statusResult.exitCode != 0) return [];
+    
+    final pathsMap = await _getSubmodulePaths(repo.path);
+    final urlsMap = await _getSubmoduleUrls(repo.path);
+    
+    // Create reverse map: path -> name
+    final pathToName = <String, String>{};
+    pathsMap.forEach((name, path) {
+      pathToName[path.replaceAll('\\', '/')] = name;
+    });
+    
+    final lines = LineSplitter.split(statusResult.stdout as String);
+    final submodules = <SubmoduleEntity>[];
+    
+    for (final line in lines) {
+      if (line.length < 42) continue;
+      final statusChar = line.substring(0, 1);
+      final sha = line.substring(1, 41);
+      var pathAndMore = line.substring(42).trim();
+      var path = pathAndMore;
+      if (pathAndMore.contains(' (')) {
+        final index = pathAndMore.lastIndexOf(' (');
+        path = pathAndMore.substring(0, index);
+      }
+      
+      final normalizedPath = path.replaceAll('\\', '/');
+      final name = pathToName[normalizedPath] ?? path.split('/').last;
+      final url = urlsMap[name] ?? '';
+      
+      SubmoduleStatus status;
+      bool isInitialized = true;
+      if (statusChar == '-') {
+        status = SubmoduleStatus.uninitialized;
+        isInitialized = false;
+      } else if (statusChar == '+') {
+        status = SubmoduleStatus.modified;
+      } else if (statusChar == ' ') {
+        status = SubmoduleStatus.clean;
+      } else {
+        status = SubmoduleStatus.clean;
+      }
+      
+      submodules.add(SubmoduleEntity(
+        name: name,
+        path: path,
+        url: url,
+        sha: sha,
+        status: status,
+        isInitialized: isInitialized,
+      ));
+    }
+    return submodules;
+  }
+
+  @override
+  Future<void> initSubmodules(GitRepo repo) async {
+    await _run(['submodule', 'init'], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> updateSubmodules(GitRepo repo) async {
+    await _run(['submodule', 'update', '--init', '--recursive'], workingDirectory: repo.path);
+  }
+
+  @override
+  Future<void> syncSubmodules(GitRepo repo) async {
+    await _run(['submodule', 'sync'], workingDirectory: repo.path);
+  }
 }
 
 /// Internal helper for collecting remote fetch/push URLs.
