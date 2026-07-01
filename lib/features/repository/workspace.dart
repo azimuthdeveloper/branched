@@ -15,10 +15,19 @@ import '../staging/staging_panel.dart';
 import 'repository_bloc.dart';
 import 'toolbar.dart';
 
-class MainWorkspace extends StatelessWidget {
+
+class MainWorkspace extends StatefulWidget {
   final GitRepo repo;
 
   const MainWorkspace({super.key, required this.repo});
+
+  @override
+  State<MainWorkspace> createState() => _MainWorkspaceState();
+}
+
+class _MainWorkspaceState extends State<MainWorkspace> {
+  double _sidebarWidth = 220.0;
+  double _commitDetailsHeight = 350.0;
 
   @override
   Widget build(BuildContext context) {
@@ -26,16 +35,16 @@ class MainWorkspace extends StatelessWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider<RepositoryBloc>(
-          create: (context) => RepositoryBloc(locator<GitService>())..add(LoadRepositoryDetailsEvent(repo.path)),
+          create: (context) => RepositoryBloc(locator<GitService>())..add(LoadRepositoryDetailsEvent(widget.repo.path)),
         ),
         BlocProvider<SidebarBloc>(
-          create: (context) => SidebarBloc(locator<GitService>())..add(LoadSidebarEvent(repo)),
+          create: (context) => SidebarBloc(locator<GitService>())..add(LoadSidebarEvent(widget.repo)),
         ),
         BlocProvider<CommitGraphBloc>(
-          create: (context) => CommitGraphBloc(locator<GitService>())..add(LoadCommitHistoryEvent(repo)),
+          create: (context) => CommitGraphBloc(locator<GitService>())..add(LoadCommitHistoryEvent(widget.repo)),
         ),
         BlocProvider<StagingBloc>(
-          create: (context) => StagingBloc(locator<GitService>())..add(LoadWorkingCopyEvent(repo)),
+          create: (context) => StagingBloc(locator<GitService>())..add(LoadWorkingCopyEvent(widget.repo)),
         ),
         BlocProvider<DiffViewerBloc>(
           create: (context) => DiffViewerBloc(locator<GitService>()),
@@ -47,11 +56,11 @@ class MainWorkspace extends StatelessWidget {
           if (state.selectedItem.type == SidebarItemType.branch ||
               state.selectedItem.type == SidebarItemType.remoteBranch) {
             context.read<CommitGraphBloc>().add(
-                  LoadCommitHistoryEvent(repo, branch: state.selectedItem.refName),
+                  LoadCommitHistoryEvent(widget.repo, branch: state.selectedItem.refName),
                 );
           } else if (state.selectedItem.type == SidebarItemType.tag) {
             context.read<CommitGraphBloc>().add(
-                  LoadCommitHistoryEvent(repo), // Tag selections show all history, then we can jump to it
+                  LoadCommitHistoryEvent(widget.repo), // Tag selections show all history, then we can jump to it
                 );
           }
         },
@@ -60,25 +69,46 @@ class MainWorkspace extends StatelessWidget {
           child: Column(
             children: [
               // Toolbar
-              ToolbarWidget(repo: repo),
+              ToolbarWidget(repo: widget.repo),
 
               // Layout below Toolbar
               Expanded(
                 child: Row(
                   children: [
-                    // Sidebar
-                    SidebarWidget(repo: repo),
+                    // Sidebar (resizable)
+                    SizedBox(
+                      width: _sidebarWidth,
+                      child: SidebarWidget(repo: widget.repo),
+                    ),
 
-                    const VerticalDivider(color: FurcateTheme.darkBorder, width: 1),
+                    // Draggable Vertical Splitter
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        const VerticalDivider(color: FurcateTheme.darkBorder, width: 1),
+                        GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onHorizontalDragUpdate: (details) {
+                            setState(() {
+                              _sidebarWidth = (_sidebarWidth + details.delta.dx).clamp(150.0, 450.0);
+                            });
+                          },
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.resizeColumn,
+                            child: const SizedBox(width: 8, height: double.infinity),
+                          ),
+                        ),
+                      ],
+                    ),
 
                     // Main Content depending on Sidebar Selection
                     Expanded(
                       child: BlocBuilder<SidebarBloc, SidebarState>(
                         builder: (context, sidebarState) {
                           if (sidebarState.selectedItem.type == SidebarItemType.changes) {
-                            return StagingPanel(repo: repo);
+                            return StagingPanel(repo: widget.repo);
                           } else {
-                            return _buildHistoryAndCommitDetailView(context, repo);
+                            return _buildHistoryAndCommitDetailView(context, widget.repo);
                           }
                         },
                       ),
@@ -98,15 +128,32 @@ class MainWorkspace extends StatelessWidget {
       children: [
         // Commit History Graph Panel
         const Expanded(
-          flex: 6,
           child: CommitGraphWidget(),
         ),
 
-        const Divider(color: FurcateTheme.darkBorder, height: 1),
+        // Draggable Horizontal Splitter
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            const Divider(color: FurcateTheme.darkBorder, height: 1),
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragUpdate: (details) {
+                setState(() {
+                  _commitDetailsHeight = (_commitDetailsHeight - details.delta.dy).clamp(150.0, 600.0);
+                });
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeRow,
+                child: const SizedBox(height: 8, width: double.infinity),
+              ),
+            ),
+          ],
+        ),
 
         // Commit Details Bottom Panel
-        Expanded(
-          flex: 4,
+        SizedBox(
+          height: _commitDetailsHeight,
           child: BlocBuilder<CommitGraphBloc, CommitGraphState>(
             builder: (context, state) {
               final commit = state.selectedCommit;
