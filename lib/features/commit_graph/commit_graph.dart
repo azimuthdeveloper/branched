@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme.dart';
+import '../../core/locator.dart';
 import '../../git_engine/git_models.dart';
+import '../../git_engine/git_service.dart';
+import '../sidebar/sidebar_bloc.dart';
+import '../repository/repository_bloc.dart';
+import '../staging/staging_bloc.dart';
 import 'commit_graph_bloc.dart';
 import 'commit_graph_painter.dart';
 
@@ -24,6 +30,230 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
     _graphScrollController.dispose();
     _listScrollController.dispose();
     super.dispose();
+  }
+
+  void _showCommitContextMenu(BuildContext context, TapDownDetails details, CommitEntity commit) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(details.globalPosition, details.globalPosition),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        const PopupMenuItem<String>(
+          value: 'cherrypick',
+          child: Text('Cherry-pick Commit', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuItem<String>(
+          value: 'revert',
+          child: Text('Revert Commit', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuItem<String>(
+          value: 'reset',
+          child: Text('Reset to Commit', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'branch',
+          child: Text('Create Branch Here', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuItem<String>(
+          value: 'tag',
+          child: Text('Create Tag Here', style: TextStyle(fontSize: 12)),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'copy',
+          child: Text('Copy SHA', style: TextStyle(fontSize: 12)),
+        ),
+      ],
+    ).then((value) async {
+      if (value == null) return;
+
+      final repoState = context.read<RepositoryBloc>().state;
+      if (repoState is! RepositoryLoaded) return;
+      final repo = repoState.repo;
+      final gitService = locator<GitService>();
+
+      try {
+        switch (value) {
+          case 'cherrypick':
+            await gitService.cherryPick(repo, commit.sha);
+            break;
+          case 'revert':
+            await gitService.revertCommit(repo, commit.sha);
+            break;
+          case 'reset':
+            final mode = await showDialog<String>(
+              context: context,
+              builder: (ctx) {
+                String selectedMode = 'mixed';
+                return StatefulBuilder(
+                  builder: (ctx, setDialogState) {
+                    return AlertDialog(
+                      title: const Text('Reset to Commit'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Reset current branch HEAD to ${commit.shortSha}?\n'),
+                          RadioListTile<String>(
+                            title: const Text('Soft (--soft)'),
+                            subtitle: const Text('Keep changes staged for commit'),
+                            value: 'soft',
+                            groupValue: selectedMode,
+                            onChanged: (val) => setDialogState(() => selectedMode = val!),
+                          ),
+                          RadioListTile<String>(
+                            title: const Text('Mixed (--mixed)'),
+                            subtitle: const Text('Keep changes unstaged'),
+                            value: 'mixed',
+                            groupValue: selectedMode,
+                            onChanged: (val) => setDialogState(() => selectedMode = val!),
+                          ),
+                          RadioListTile<String>(
+                            title: const Text('Hard (--hard)'),
+                            subtitle: const Text('Discard all changes (WARNING: destructive)'),
+                            value: 'hard',
+                            groupValue: selectedMode,
+                            onChanged: (val) => setDialogState(() => selectedMode = val!),
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(null),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(selectedMode),
+                          child: const Text('Reset', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            );
+            if (mode == null) return;
+            if (mode == 'hard') {
+              final confirmHard = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Confirm Hard Reset'),
+                  content: const Text('Warning: A hard reset will permanently discard all unstaged and staged changes in your working directory. This action cannot be undone.\n\nAre you sure you want to proceed?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('Hard Reset', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmHard != true) return;
+            }
+            await gitService.reset(repo, commit.sha, mode: mode);
+            break;
+          case 'branch':
+            final textController = TextEditingController();
+            final branchName = await showDialog<String>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Create Branch Here'),
+                content: TextField(
+                  controller: textController,
+                  decoration: const InputDecoration(labelText: 'Branch name'),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(null),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(textController.text.trim()),
+                    child: const Text('Create'),
+                  ),
+                ],
+              ),
+            );
+            if (branchName != null && branchName.isNotEmpty) {
+              await gitService.createBranch(repo, branchName, startPoint: commit.sha);
+            }
+            break;
+          case 'tag':
+            final nameController = TextEditingController();
+            final messageController = TextEditingController();
+            final tagInfo = await showDialog<Map<String, String>>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Create Tag Here'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(labelText: 'Tag name (required)'),
+                    ),
+                    TextField(
+                      controller: messageController,
+                      decoration: const InputDecoration(labelText: 'Message (optional)'),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(null),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop({
+                      'name': nameController.text.trim(),
+                      'message': messageController.text.trim(),
+                    }),
+                    child: const Text('Create'),
+                  ),
+                ],
+              ),
+            );
+            if (tagInfo != null && tagInfo['name']!.isNotEmpty) {
+              await gitService.createTag(
+                repo,
+                tagInfo['name']!,
+                target: commit.sha,
+                message: tagInfo['message']!.isNotEmpty ? tagInfo['message'] : null,
+              );
+            }
+            break;
+          case 'copy':
+            await Clipboard.setData(ClipboardData(text: commit.sha));
+            break;
+        }
+
+        if (mounted) {
+          _refreshRepository(context, repo);
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Operation failed: $e')),
+          );
+        }
+      }
+    });
+  }
+
+  void _refreshRepository(BuildContext context, GitRepo repo) {
+    final commitGraphState = context.read<CommitGraphBloc>().state;
+    context.read<CommitGraphBloc>().add(LoadCommitHistoryEvent(repo, branch: commitGraphState.branchFilter));
+    context.read<SidebarBloc>().add(LoadSidebarEvent(repo));
+    context.read<RepositoryBloc>().add(const RefreshRepositoryEvent());
+    context.read<StagingBloc>().add(LoadWorkingCopyEvent(repo));
   }
 
   @override
@@ -97,6 +327,9 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
                                   return GestureDetector(
                                     onTap: () {
                                       context.read<CommitGraphBloc>().add(SelectCommitEvent(gc.commit));
+                                    },
+                                    onSecondaryTapDown: (details) {
+                                      _showCommitContextMenu(context, details, gc.commit);
                                     },
                                     child: Container(
                                       color: isSelected

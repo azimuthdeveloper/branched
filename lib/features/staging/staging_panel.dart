@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/theme.dart';
 import '../../git_engine/git_models.dart';
@@ -26,6 +28,49 @@ class _StagingPanelState extends State<StagingPanel> {
   void initState() {
     super.initState();
     context.read<StagingBloc>().add(LoadWorkingCopyEvent(widget.repo));
+    HardwareKeyboard.instance.addHandler(_handleStagingKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleStagingKey);
+    _summaryController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  bool _handleStagingKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+
+    final isControlPressed = HardwareKeyboard.instance.isControlPressed;
+    final isMetaPressed = HardwareKeyboard.instance.isMetaPressed;
+    final isCmdOrCtrl = isControlPressed || isMetaPressed;
+
+    if (isCmdOrCtrl && event.logicalKey == LogicalKeyboardKey.enter) {
+      _triggerCommit();
+      return true;
+    }
+
+    return false;
+  }
+
+  void _triggerCommit() {
+    final state = context.read<StagingBloc>().state;
+    final canCommit = state.stagedFiles.isNotEmpty && _summaryController.text.trim().isNotEmpty;
+    if (canCommit && !state.isCommitting) {
+      context.read<StagingBloc>().add(
+            CommitChangesEvent(
+              widget.repo,
+              _summaryController.text.trim(),
+              body: _descriptionController.text.trim(),
+            ),
+          );
+      _summaryController.clear();
+      _descriptionController.clear();
+      setState(() {
+        _selectedFilePath = null;
+      });
+    }
   }
 
   void _onFileSelected(String path, bool isStaged) {
@@ -36,6 +81,101 @@ class _StagingPanelState extends State<StagingPanel> {
     context.read<DiffViewerBloc>().add(
           LoadFileDiffEvent(repo: widget.repo, path: path, staged: isStaged),
         );
+  }
+
+  Future<void> _openInEditor(String filePath) async {
+    try {
+      if (Platform.isMacOS) {
+        await Process.run('open', [filePath]);
+      } else if (Platform.isWindows) {
+        await Process.run('cmd', ['/c', 'start', '', filePath], runInShell: true);
+      } else {
+        // Linux
+        await Process.run('xdg-open', [filePath]);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to open file: $e')),
+        );
+      }
+    }
+  }
+
+  void _showFileContextMenu(BuildContext context, TapDownDetails details, FileStatusEntity file, bool isStaged) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(details.globalPosition, details.globalPosition),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      items: isStaged
+          ? [
+              const PopupMenuItem<String>(
+                value: 'unstage',
+                child: Text('Unstage File', style: TextStyle(fontSize: 12)),
+              ),
+              const PopupMenuItem<String>(
+                value: 'open',
+                child: Text('Open in Editor', style: TextStyle(fontSize: 12)),
+              ),
+            ]
+          : [
+              const PopupMenuItem<String>(
+                value: 'stage',
+                child: Text('Stage File', style: TextStyle(fontSize: 12)),
+              ),
+              const PopupMenuItem<String>(
+                value: 'discard',
+                child: Text('Discard Changes', style: TextStyle(fontSize: 12)),
+              ),
+              const PopupMenuItem<String>(
+                value: 'open',
+                child: Text('Open in Editor', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+    ).then((value) async {
+      if (value == null) return;
+
+      final stagingBloc = context.read<StagingBloc>();
+
+      switch (value) {
+        case 'stage':
+          stagingBloc.add(StageFileEvent(widget.repo, file.path));
+          break;
+        case 'unstage':
+          stagingBloc.add(UnstageFileEvent(widget.repo, file.path));
+          break;
+        case 'discard':
+          final confirm = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Discard Changes'),
+              content: Text('Are you sure you want to discard changes in "${file.path}"? This cannot be undone.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('Discard', style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          );
+          if (confirm == true) {
+            stagingBloc.add(DiscardChangesEvent(widget.repo, file.path));
+          }
+          break;
+        case 'open':
+          await _openInEditor('${widget.repo.path}/${file.path}');
+          break;
+      }
+    });
   }
 
   @override
@@ -177,6 +317,7 @@ class _StagingPanelState extends State<StagingPanel> {
 
     return GestureDetector(
       onTap: () => _onFileSelected(file.path, isStaged),
+      onSecondaryTapDown: (details) => _showFileContextMenu(context, details, file, isStaged),
       child: Container(
         height: 28,
         color: isSelected ? FurcateTheme.darkSelection : Colors.transparent,
