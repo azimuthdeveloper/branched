@@ -15,12 +15,14 @@ class CommitGraphWidget extends StatefulWidget {
 
 class _CommitGraphWidgetState extends State<CommitGraphWidget> {
   final _searchController = TextEditingController();
-  final _scrollController = ScrollController();
+  final _graphScrollController = ScrollController();
+  final _listScrollController = ScrollController();
 
   @override
   void dispose() {
     _searchController.dispose();
-    _scrollController.dispose();
+    _graphScrollController.dispose();
+    _listScrollController.dispose();
     super.dispose();
   }
 
@@ -62,7 +64,7 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
                               child: IgnorePointer(
                                 child: ClipRect(
                                   child: SingleChildScrollView(
-                                    controller: _scrollController,
+                                    controller: _graphScrollController,
                                     physics: const NeverScrollableScrollPhysics(), // Handled by ListView
                                     child: CustomPaint(
                                       size: Size(120, state.visibleCommits.length * 28.0),
@@ -77,87 +79,95 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
                             ),
 
                             // ListView for Text columns
-                            ListView.builder(
-                              controller: _scrollController,
-                              itemCount: state.visibleCommits.length,
-                              itemExtent: 28.0,
-                              itemBuilder: (context, index) {
-                                final gc = state.visibleCommits[index];
-                                final isSelected = state.selectedCommit?.sha == gc.commit.sha;
+                            NotificationListener<ScrollNotification>(
+                              onNotification: (scrollNotification) {
+                                if (_graphScrollController.hasClients && _listScrollController.hasClients) {
+                                  _graphScrollController.jumpTo(_listScrollController.offset);
+                                }
+                                return false;
+                              },
+                              child: ListView.builder(
+                                controller: _listScrollController,
+                                itemCount: state.visibleCommits.length,
+                                itemExtent: 28.0,
+                                itemBuilder: (context, index) {
+                                  final gc = state.visibleCommits[index];
+                                  final isSelected = state.selectedCommit?.sha == gc.commit.sha;
 
-                                return GestureDetector(
-                                  onTap: () {
-                                    context.read<CommitGraphBloc>().add(SelectCommitEvent(gc.commit));
-                                  },
-                                  child: Container(
-                                    color: isSelected
-                                        ? FurcateTheme.darkSelection
-                                        : (index % 2 == 0 ? Colors.transparent : FurcateTheme.darkBgSecondary.withOpacity(0.3)),
-                                    child: Row(
-                                      children: [
-                                        // Padding placeholder for the graph (width matching painter layout)
-                                        const SizedBox(width: 100),
+                                  return GestureDetector(
+                                    onTap: () {
+                                      context.read<CommitGraphBloc>().add(SelectCommitEvent(gc.commit));
+                                    },
+                                    child: Container(
+                                      color: isSelected
+                                          ? FurcateTheme.darkSelection
+                                          : (index % 2 == 0 ? Colors.transparent : FurcateTheme.darkBgSecondary.withOpacity(0.3)),
+                                      child: Row(
+                                        children: [
+                                          // Padding placeholder for the graph (width matching painter layout)
+                                          const SizedBox(width: 100),
 
-                                        // Commit description + Branch badges
-                                        Expanded(
-                                          child: Row(
-                                            children: [
-                                              // Refs/Badges
-                                              if (gc.commit.refs.isNotEmpty) ...[
-                                                ...gc.commit.refs.map((ref) => _buildRefBadge(ref)),
-                                                const SizedBox(width: 6),
-                                              ],
-                                              Expanded(
-                                                child: Text(
-                                                  gc.commit.summary,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: isSelected ? FurcateTheme.darkTextEmphasis : FurcateTheme.darkTextPrimary,
+                                          // Commit description + Branch badges
+                                          Expanded(
+                                            child: Row(
+                                              children: [
+                                                // Refs/Badges
+                                                if (gc.commit.refs.isNotEmpty) ...[
+                                                  ...gc.commit.refs.map((ref) => _buildRefBadge(ref)),
+                                                  const SizedBox(width: 6),
+                                                ],
+                                                Expanded(
+                                                  child: Text(
+                                                    gc.commit.summary,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: isSelected ? FurcateTheme.darkTextEmphasis : FurcateTheme.darkTextPrimary,
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-
-                                        // Author
-                                        SizedBox(
-                                          width: 140,
-                                          child: Text(
-                                            gc.commit.author.name,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextSecondary),
-                                          ),
-                                        ),
-
-                                        // Date
-                                        SizedBox(
-                                          width: 100,
-                                          child: Text(
-                                            DateFormat('yyyy-MM-dd').format(gc.commit.dateTime),
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextSecondary),
-                                          ),
-                                        ),
-
-                                        // SHA
-                                        SizedBox(
-                                          width: 70,
-                                          child: Text(
-                                            gc.commit.shortSha,
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontFamily: 'Courier',
-                                              color: FurcateTheme.darkTextSecondary,
+                                              ],
                                             ),
                                           ),
-                                        ),
-                                      ],
+
+                                          // Author
+                                          SizedBox(
+                                            width: 140,
+                                            child: Text(
+                                              gc.commit.author.name,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextSecondary),
+                                            ),
+                                          ),
+
+                                          // Date
+                                          SizedBox(
+                                            width: 100,
+                                            child: Text(
+                                              DateFormat('yyyy-MM-dd').format(gc.commit.dateTime),
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontSize: 12, color: FurcateTheme.darkTextSecondary),
+                                            ),
+                                          ),
+
+                                          // SHA
+                                          SizedBox(
+                                            width: 70,
+                                            child: Text(
+                                              gc.commit.shortSha,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                fontFamily: 'Courier',
+                                                color: FurcateTheme.darkTextSecondary,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                );
-                              },
+                                  );
+                                },
+                              ),
                             ),
                           ],
                         );

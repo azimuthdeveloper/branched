@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'git_models.dart';
@@ -33,10 +34,10 @@ class RealGitService implements GitService {
   }) async {
     final result = await Process.run(
       'git',
-      args,
+      ['-c', 'core.quotepath=false', ...args],
       workingDirectory: workingDirectory,
-      stdoutEncoding: systemEncoding,
-      stderrEncoding: systemEncoding,
+      stdoutEncoding: utf8,
+      stderrEncoding: utf8,
     );
     if (!allowFailure && result.exitCode != 0) {
       throw GitException(
@@ -298,15 +299,18 @@ class RealGitService implements GitService {
     const format =
         '%H$fieldSep%h$fieldSep%s$fieldSep%b$fieldSep%an$fieldSep%ae$fieldSep%cn$fieldSep%ce$fieldSep%aI$fieldSep%P$fieldSep%D$recordSep';
 
-    final args = [
-      'log',
-      '--all',
-      '--date-order',
+    final args = ['log'];
+    if (branch != null) {
+      args.add(branch);
+    } else {
+      args.addAll(['--all', '--date-order']);
+    }
+    args.addAll([
       '--format=$format',
       '--skip=$offset',
       '-n',
       '$limit',
-    ];
+    ]);
 
     final result = await _run(args, workingDirectory: repo.path, allowFailure: true);
     if (result.exitCode != 0) return [];
@@ -394,11 +398,77 @@ class RealGitService implements GitService {
 
   @override
   Future<CommitEntity> getCommit(GitRepo repo, String sha) async {
-    final commits = await getCommitHistory(repo, limit: 1, branch: sha);
-    if (commits.isEmpty) {
-      throw GitException('getCommit', 1, 'Commit $sha not found');
+    // Record separator to safely split multi-line messages.
+    const recordSep = '---RECORD---';
+    const fieldSep = '---FIELD---';
+    // Fields: sha, short sha, subject, body, author name, author email,
+    //         committer name, committer email, date (ISO), parent shas, decorate
+    const format =
+        '%H$fieldSep%h$fieldSep%s$fieldSep%b$fieldSep%an$fieldSep%ae$fieldSep%cn$fieldSep%ce$fieldSep%aI$fieldSep%P$fieldSep%D$recordSep';
+
+    final result = await _run(
+      ['log', '-1', '--format=$format', sha],
+      workingDirectory: repo.path,
+      allowFailure: true,
+    );
+    if (result.exitCode != 0) {
+      throw GitException('getCommit', result.exitCode, (result.stderr as String).trim());
     }
-    return commits.first;
+
+    final raw = _stdout(result);
+    final records = raw.split(recordSep);
+
+    // Determine current HEAD sha for isHead marking.
+    String? headSha;
+    final headResult = await _run(
+      ['rev-parse', 'HEAD'],
+      workingDirectory: repo.path,
+      allowFailure: true,
+    );
+    if (headResult.exitCode == 0) {
+      headSha = _stdout(headResult).trim();
+    }
+
+    for (final record in records) {
+      final trimmed = record.trim();
+      if (trimmed.isEmpty) continue;
+      final fields = trimmed.split(fieldSep);
+      if (fields.length < 11) continue;
+
+      final commitSha = fields[0].trim();
+      final shortSha = fields[1].trim();
+      final subject = fields[2].trim();
+      final body = fields[3].trim();
+      final authorName = fields[4].trim();
+      final authorEmail = fields[5].trim();
+      final committerName = fields[6].trim();
+      final committerEmail = fields[7].trim();
+      final dateStr = fields[8].trim();
+      final parentStr = fields[9].trim();
+      final decorateStr = fields[10].trim();
+
+      final parentShas =
+          parentStr.isEmpty ? <String>[] : parentStr.split(' ').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+
+      final message = body.isNotEmpty ? '$subject\n\n$body' : subject;
+
+      final refs = _parseDecorateRefs(decorateStr);
+
+      return CommitEntity(
+        sha: commitSha,
+        shortSha: shortSha,
+        message: message,
+        summary: subject,
+        author: AuthorEntity(name: authorName, email: authorEmail),
+        committer: AuthorEntity(name: committerName, email: committerEmail),
+        dateTime: DateTime.tryParse(dateStr) ?? DateTime.now(),
+        parentShas: parentShas,
+        isHead: commitSha == headSha,
+        isMergeCommit: parentShas.length > 1,
+        refs: refs,
+      );
+    }
+    throw GitException('getCommit', 1, 'Commit $sha not found');
   }
 
   @override
@@ -576,6 +646,18 @@ class RealGitService implements GitService {
   Future<void> discardAll(GitRepo repo) async {
     await _run(['checkout', '--', '.'], workingDirectory: repo.path, allowFailure: true);
     await _run(['clean', '-fd'], workingDirectory: repo.path);
+  }
+
+  Future<List<String>> discardAllPreview(GitRepo repo) async {
+    final result = await _run(['clean', '-fdn'], workingDirectory: repo.path);
+    final raw = _stdout(result).trim();
+    if (raw.isEmpty) return [];
+    return raw.split('\n').map((line) {
+      if (line.startsWith('Would remove ')) {
+        return line.substring('Would remove '.length).trim();
+      }
+      return line.trim();
+    }).toList();
   }
 
   // ---------------------------------------------------------------------------
