@@ -1,0 +1,65 @@
+name: Cross-Platform Parallel Builds
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build for ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            output-path: build/linux/x64/release/bundle/
+          - os: macos-latest
+            platform: macos
+            output-path: build/macos/Build/Products/Release/
+          - os: windows-latest
+            platform: windows
+            output-path: build/windows/x64/runner/Release/
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter Installation
+        run: flutter doctor
+
+      - name: Fetch Dependencies
+        run: flutter pub get
+
+      - name: Build Application
+        run: |
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            flutter build windows --release
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            flutter build macos --release --no-codesign
+          else
+            flutter build linux --release
+          fi
+        shell: bash
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: branched-${{ matrix.platform }}
+          path: ${{ matrix.output-path }}
