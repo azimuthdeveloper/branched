@@ -52,7 +52,7 @@ jobs:
           if [ "${{ matrix.platform }}" = "windows" ]; then
             flutter build windows --release
           elif [ "${{ matrix.platform }}" = "macos" ]; then
-            flutter build macos --release --no-codesign
+            flutter build macos --release
           else
             flutter build linux --release
           fi

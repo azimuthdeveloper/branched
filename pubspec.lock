@@ -210,22 +210,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.2.1"
-  git2dart:
-    dependency: "direct main"
-    description:
-      name: git2dart
-      sha256: "4a5faacd5d405ce46818d3b352e216a138a29de1e94db5c4d1e9bc1598914a23"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.5.2"
-  git2dart_binaries:
-    dependency: transitive
-    description:
-      name: git2dart_binaries
-      sha256: f007d672a6c18cdd0da9cc62a11818c1fff90ff380627b49a2f701bbead7e3f8
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.11.4"
   google_fonts:
     dependency: "direct main"
     description:
