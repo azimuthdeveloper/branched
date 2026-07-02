@@ -129,6 +129,17 @@ class WindowChrome extends StatelessWidget {
               ),
               const SizedBox(width: 8),
 
+              // Embedded Git Hash in custom title bar
+              const Text(
+                String.fromEnvironment('GIT_HASH', defaultValue: 'local'),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: FurcateTheme.darkTextSecondary,
+                  fontFamily: 'monospace',
+                ),
+              ),
+              const SizedBox(width: 16),
+
               // Window minimize/maximize/close buttons placeholders
               const Icon(Icons.remove, size: 16, color: FurcateTheme.darkTextSecondary),
               const SizedBox(width: 12),

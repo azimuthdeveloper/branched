@@ -3,6 +3,7 @@ name: Cross-Platform Parallel Builds
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
@@ -47,14 +48,34 @@ jobs:
       - name: Fetch Dependencies
         run: flutter pub get
 
+      - name: Get Short SHA
+        id: git_sha
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Build Application
         run: |
           if [ "${{ matrix.platform }}" = "windows" ]; then
-            flutter build windows --release
+            flutter build windows --release --dart-define=GIT_HASH=${{ steps.git_sha.outputs.sha }}
           elif [ "${{ matrix.platform }}" = "macos" ]; then
-            flutter build macos --release
+            flutter build macos --release --dart-define=GIT_HASH=${{ steps.git_sha.outputs.sha }}
           else
-            flutter build linux --release
+            flutter build linux --release --dart-define=GIT_HASH=${{ steps.git_sha.outputs.sha }}
+          fi
+        shell: bash
+
+      - name: Package Artifacts
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            cd build/windows/x64/runner/Release/
+            zip -r ../../../../../dist/branched-windows.zip *
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            cd build/macos/Build/Products/Release/
+            zip -r ../../../../../dist/branched-macos.zip branched.app
+          else
+            cd build/linux/x64/release/bundle/
+            tar -czf ../../../../../dist/branched-linux.tar.gz *
           fi
         shell: bash
 
@@ -63,3 +84,47 @@ jobs:
         with:
           name: branched-${{ matrix.platform }}
           path: ${{ matrix.output-path }}
+
+      - name: Upload Packaged Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: branched-${{ matrix.platform }}-dist
+          path: dist/
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: branched-linux-dist
+          path: dist
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: branched-macos-dist
+          path: dist
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: branched-windows-dist
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/branched-linux.tar.gz
+            dist/branched-macos.zip
+            dist/branched-windows.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

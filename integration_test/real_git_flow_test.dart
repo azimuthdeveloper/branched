@@ -89,13 +89,6 @@ void main() {
   });
 
   testWidgets('Real Git Integration Test - Full Lifecycle, Staging, Submodules & Context Menus', (WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1280, 1024);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
-
     final boundaryKey = GlobalKey();
 
     Future<void> capture(String name) async {

@@ -670,7 +670,7 @@ class RealGitService implements GitService {
     String path, {
     bool staged = false,
   }) async {
-    final args = <String>['diff'];
+    final args = <String>['diff', '--submodule'];
     if (staged) args.add('--cached');
     args.addAll(['--', path]);
 
@@ -775,6 +775,60 @@ class RealGitService implements GitService {
 
   /// Parse a single file's unified diff output.
   FileDiffEntity _parseSingleFileDiff(String raw, {String? fallbackPath}) {
+    if (raw.contains('Submodule ')) {
+      final lines = raw.split('\n');
+      final hunks = <DiffHunkEntity>[];
+      final diffLines = <DiffLineEntity>[];
+      String header = 'Submodule changes';
+      int added = 0;
+      int deleted = 0;
+
+      for (final line in lines) {
+        if (line.startsWith('Submodule ')) {
+          header = line;
+        } else if (line.trim().startsWith('>')) {
+          added++;
+          diffLines.add(DiffLineEntity(
+            content: line,
+            origin: DiffLineOrigin.addition,
+            newLineNumber: added,
+          ));
+        } else if (line.trim().startsWith('<')) {
+          deleted++;
+          diffLines.add(DiffLineEntity(
+            content: line,
+            origin: DiffLineOrigin.deletion,
+            oldLineNumber: deleted,
+          ));
+        } else if (line.trim().isNotEmpty) {
+          diffLines.add(DiffLineEntity(
+            content: line,
+            origin: DiffLineOrigin.context,
+          ));
+        }
+      }
+
+      if (diffLines.isNotEmpty) {
+        hunks.add(DiffHunkEntity(
+          oldStart: 1,
+          oldLines: deleted,
+          newStart: 1,
+          newLines: added,
+          header: header,
+          lines: diffLines,
+        ));
+      }
+
+      return FileDiffEntity(
+        path: fallbackPath ?? '',
+        status: FileChangeStatus.modified,
+        hunks: hunks,
+        isBinary: false,
+        addedLines: added,
+        deletedLines: deleted,
+      );
+    }
+
     final lines = raw.split('\n');
 
     // Extract path from "diff --git a/foo b/foo" or "+++ b/foo"
@@ -1043,7 +1097,7 @@ class RealGitService implements GitService {
     void Function(double)? onProgress,
   }) async {
     onProgress?.call(0.0);
-    final args = ['push', '--progress'];
+    final args = ['push', '--progress', '--recurse-submodules=on-demand'];
     if (force) args.add('--force');
     if (remote != null) args.add(remote);
     if (branch != null) args.add(branch);

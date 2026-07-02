@@ -11,7 +11,7 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
 
 echo "Starting virtual frame buffer Xvfb on DISPLAY :99..."
-Xvfb :99 -ac -screen 0 1024x768x24 > /dev/null 2>&1 &
+Xvfb :99 -ac -screen 0 1280x1024x24 > /dev/null 2>&1 &
 XVFB_PID=$!
 sleep 2
 
@@ -21,8 +21,8 @@ OPENBOX_PID=$!
 sleep 1
 
 echo "Running integration tests..."
-flutter test integration_test/branch_merge_flow_test.dart
-flutter test integration_test/real_git_flow_test.dart
+flutter test -d linux integration_test/branch_merge_flow_test.dart
+flutter test -d linux integration_test/real_git_flow_test.dart
 
 echo "Cleaning up..."
 kill -9 $OPENBOX_PID || true

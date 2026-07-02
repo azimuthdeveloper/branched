@@ -23,15 +23,6 @@ void main() {
     locator.registerLazySingleton<FilePickerService>(() => TestFilePickerService());
   });
 
-  testWidgets('Integration Test - Branching, Merging, and Conflict resolution flows', (WidgetTester tester) async {
-    // Set a large screen size to prevent layout overflows during testing
-    tester.view.physicalSize = const Size(1280, 1024);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
-
     final boundaryKey = GlobalKey();
 
     Future<void> capture(String name) async {

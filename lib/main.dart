@@ -19,12 +19,13 @@ void main() async {
 
   runApp(const FurcateApp());
 
+  const gitHash = String.fromEnvironment('GIT_HASH', defaultValue: 'local');
   // Show window once it is fully ready
   windowManager.waitUntilReadyToShow(
     const WindowOptions(
       size: Size(1280, 720),
       center: true,
-      title: 'Furcate — Git Client',
+      title: 'Furcate — Git Client ($gitHash)',
     ),
     () async {
       await windowManager.show();
