@@ -85,6 +85,11 @@ class _StagingPanelState extends State<StagingPanel> {
 
   Future<void> _openInEditor(String filePath) async {
     try {
+      if (Platform.isAndroid) {
+        await _showAndroidTextEditor(filePath);
+        return;
+      }
+
       if (Platform.isMacOS) {
         await Process.run('open', [filePath]);
       } else if (Platform.isWindows) {
@@ -99,6 +104,108 @@ class _StagingPanelState extends State<StagingPanel> {
           SnackBar(content: Text('Failed to open file: $e')),
         );
       }
+    }
+  }
+
+  Future<void> _showAndroidTextEditor(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File does not exist locally.')),
+        );
+      }
+      return;
+    }
+
+    String initialContent = '';
+    try {
+      initialContent = await file.readAsString();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to read file: $e')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    final controller = TextEditingController(text: initialContent);
+
+    await showGeneralDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return Scaffold(
+          backgroundColor: FurcateTheme.darkBgPrimary,
+          appBar: AppBar(
+            backgroundColor: FurcateTheme.darkBgTitlebar,
+            title: Text(
+              filePath.split('/').last,
+              style: const TextStyle(fontSize: 14, color: FurcateTheme.darkTextEmphasis),
+            ),
+            leading: IconButton(
+              icon: const Icon(Icons.close, color: FurcateTheme.darkTextPrimary),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await file.writeAsString(controller.text);
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('File saved successfully.')),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to save file: $e')),
+                      );
+                    }
+                  }
+                },
+                child: const Text(
+                  'Save',
+                  style: TextStyle(
+                    color: FurcateTheme.darkAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          body: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: controller,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: FurcateTheme.darkTextPrimary,
+              ),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                hintText: 'Enter file contents...',
+                hintStyle: TextStyle(color: FurcateTheme.darkTextSecondary),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    // Refresh working copy after editor closes
+    if (mounted) {
+      context.read<StagingBloc>().add(LoadWorkingCopyEvent(widget.repo));
     }
   }
 

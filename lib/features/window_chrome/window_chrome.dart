@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:file_picker/file_picker.dart';
@@ -33,16 +34,18 @@ class WindowChrome extends StatelessWidget {
           child: Row(
             children: [
               // macOS style Traffic Lights placeholder
-              Row(
-                children: [
-                  _buildTrafficLight(Colors.red),
-                  const SizedBox(width: 6),
-                  _buildTrafficLight(Colors.amber),
-                  const SizedBox(width: 6),
-                  _buildTrafficLight(Colors.green),
-                ],
-              ),
-              const SizedBox(width: 20),
+              if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) ...[
+                Row(
+                  children: [
+                    _buildTrafficLight(Colors.red),
+                    const SizedBox(width: 6),
+                    _buildTrafficLight(Colors.amber),
+                    const SizedBox(width: 6),
+                    _buildTrafficLight(Colors.green),
+                  ],
+                ),
+                const SizedBox(width: 20),
+              ],
 
               // Tabs
               Expanded(
@@ -141,12 +144,14 @@ class WindowChrome extends StatelessWidget {
               const SizedBox(width: 16),
 
               // Window minimize/maximize/close buttons placeholders
-              const Icon(Icons.remove, size: 16, color: FurcateTheme.darkTextSecondary),
-              const SizedBox(width: 12),
-              const Icon(Icons.crop_square, size: 14, color: FurcateTheme.darkTextSecondary),
-              const SizedBox(width: 12),
-              const Icon(Icons.close, size: 16, color: FurcateTheme.darkTextSecondary),
-              const SizedBox(width: 4),
+              if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) ...[
+                const Icon(Icons.remove, size: 16, color: FurcateTheme.darkTextSecondary),
+                const SizedBox(width: 12),
+                const Icon(Icons.crop_square, size: 14, color: FurcateTheme.darkTextSecondary),
+                const SizedBox(width: 12),
+                const Icon(Icons.close, size: 16, color: FurcateTheme.darkTextSecondary),
+                const SizedBox(width: 4),
+              ],
             ],
           ),
         );

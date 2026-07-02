@@ -32,6 +32,14 @@ class RealGitService implements GitService {
     required String workingDirectory,
     bool allowFailure = false,
   }) async {
+    if (Platform.isAndroid) {
+      throw GitException(
+        'git ${args.join(' ')}',
+        127,
+        'Native Git CLI operations (such as cloning) are not supported on Android. Direct local file editing and viewing is available.',
+      );
+    }
+
     final result = await Process.run(
       'git',
       ['-c', 'core.quotepath=false', ...args],

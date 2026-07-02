@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:window_manager/window_manager.dart';
@@ -11,27 +12,29 @@ import 'features/window_chrome/window_chrome.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Must initialize window_manager since it is compiled in and hides the window by default
-  await windowManager.ensureInitialized();
+
+  if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+    await windowManager.ensureInitialized();
+  }
 
   setupLocator();
 
   runApp(const FurcateApp());
 
   const gitHash = String.fromEnvironment('GIT_HASH', defaultValue: 'local');
-  // Show window once it is fully ready
-  windowManager.waitUntilReadyToShow(
-    const WindowOptions(
-      size: Size(1280, 720),
-      center: true,
-      title: 'Furcate — Git Client ($gitHash)',
-    ),
-    () async {
-      await windowManager.show();
-      await windowManager.focus();
-    },
-  );
+  if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+    windowManager.waitUntilReadyToShow(
+      const WindowOptions(
+        size: Size(1280, 720),
+        center: true,
+        title: 'Furcate — Git Client ($gitHash)',
+      ),
+      () async {
+        await windowManager.show();
+        await windowManager.focus();
+      },
+    );
+  }
 }
 
 class FurcateApp extends StatelessWidget {
@@ -57,19 +60,97 @@ class AppContentGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return WindowChrome(
-      child: BlocBuilder<RepositoryManagerBloc, RepositoryManagerState>(
-        builder: (context, state) {
-          final activeTab = state.activeTab;
-          if (activeTab == null) {
-            return const WelcomeScreen();
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 720) {
+            return _buildUnfoldPrompt(context);
           }
 
-          // Render active repo workspace
-          return MainWorkspace(
-            key: ValueKey(activeTab.id),
-            repo: GitRepo(path: activeTab.path, name: activeTab.name),
+          return BlocBuilder<RepositoryManagerBloc, RepositoryManagerState>(
+            builder: (context, state) {
+              final activeTab = state.activeTab;
+              if (activeTab == null) {
+                return const WelcomeScreen();
+              }
+
+              // Render active repo workspace
+              return MainWorkspace(
+                key: ValueKey(activeTab.id),
+                repo: GitRepo(path: activeTab.path, name: activeTab.name),
+              );
+            },
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildUnfoldPrompt(BuildContext context) {
+    return Scaffold(
+      backgroundColor: FurcateTheme.darkBgPrimary,
+      body: Container(
+        padding: const EdgeInsets.all(32),
+        color: FurcateTheme.darkBgPrimary,
+        child: Center(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.phonelink_setup,
+                  size: 64,
+                  color: FurcateTheme.darkAccent,
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'Unfold to Access Workspace',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: FurcateTheme.darkTextEmphasis,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Furcate Git Client requires all screen real estate to show commit graphs, staging panels, and side-by-side diff viewers.\n\nPlease unfold your device or rotate to landscape to access your workspace.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.5,
+                    color: FurcateTheme.darkTextSecondary,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FurcateTheme.darkBgToolbar,
+                    foregroundColor: FurcateTheme.darkTextPrimary,
+                    side: const BorderSide(color: FurcateTheme.darkBorder, width: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  onPressed: () {
+                    // Quick feedback
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Unfold your folding phone to begin.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  child: const Text(
+                    'Rotate or Unfold',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
