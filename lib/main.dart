@@ -62,7 +62,7 @@ class AppContentGate extends StatelessWidget {
     return WindowChrome(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          if (constraints.maxWidth < 720) {
+          if (constraints.maxWidth < 580) {
             return _buildUnfoldPrompt(context);
           }
 
