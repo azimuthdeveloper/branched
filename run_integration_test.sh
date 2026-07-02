@@ -22,6 +22,7 @@ sleep 1
 
 echo "Running integration tests..."
 flutter test integration_test/branch_merge_flow_test.dart
+flutter test integration_test/real_git_flow_test.dart
 
 echo "Cleaning up..."
 kill -9 $OPENBOX_PID || true
