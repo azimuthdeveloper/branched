@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:path/path.dart' as p;
 
 import 'git_models.dart';
 import 'git_service.dart';
@@ -67,14 +68,19 @@ class RealGitService implements GitService {
   Future<GitRepo> openRepository(String path) async {
     final gitDir = Directory('$path/.git');
     if (!await gitDir.exists()) {
-      // It could be a bare repo; try rev-parse as fallback.
-      final result = await _run(
-        ['rev-parse', '--git-dir'],
-        workingDirectory: path,
-        allowFailure: true,
-      );
-      if (result.exitCode != 0) {
-        throw GitException('openRepository', 1, 'Not a git repository: $path');
+      if (Platform.isAndroid) {
+        // On Android, mock git repository structure by creating .git directory
+        await gitDir.create(recursive: true);
+      } else {
+        // It could be a bare repo; try rev-parse as fallback.
+        final result = await _run(
+          ['rev-parse', '--git-dir'],
+          workingDirectory: path,
+          allowFailure: true,
+        );
+        if (result.exitCode != 0) {
+          throw GitException('openRepository', 1, 'Not a git repository: $path');
+        }
       }
     }
     final name = path
@@ -87,6 +93,7 @@ class RealGitService implements GitService {
   Future<bool> isGitRepository(String path) async {
     final dir = Directory(path);
     if (!await dir.exists()) return false;
+    if (Platform.isAndroid) return true; // On Android, treat any picked directory as a valid local repo
     final result = await _run(
       ['rev-parse', '--git-dir'],
       workingDirectory: path,
@@ -128,9 +135,14 @@ class RealGitService implements GitService {
   @override
   Future<GitRepo> initRepository(String path, {bool bare = false}) async {
     await Directory(path).create(recursive: true);
-    final args = ['init'];
-    if (bare) args.add('--bare');
-    await _run(args, workingDirectory: path);
+    if (Platform.isAndroid) {
+      // On Android, mock git init by creating a .git folder
+      await Directory('$path/.git').create(recursive: true);
+    } else {
+      final args = ['init'];
+      if (bare) args.add('--bare');
+      await _run(args, workingDirectory: path);
+    }
     final name = path
         .split(Platform.pathSeparator)
         .lastWhere((e) => e.isNotEmpty, orElse: () => 'new-repo');
@@ -160,6 +172,19 @@ class RealGitService implements GitService {
     GitRepo repo, {
     required bool remote,
   }) async {
+    if (Platform.isAndroid) {
+      if (remote) return [];
+      return [
+        const BranchEntity(
+          name: 'refs/heads/main',
+          shortName: 'main',
+          tipSha: '0000000000000000000000000000000000000000',
+          isHead: true,
+          isRemote: false,
+        )
+      ];
+    }
+
     // Use null-byte separators for robust parsing.
     // Fields: refname, refname:short, objectname, HEAD, upstream, upstream:track
     const format =
@@ -253,6 +278,16 @@ class RealGitService implements GitService {
 
   @override
   Future<BranchEntity> getCurrentBranch(GitRepo repo) async {
+    if (Platform.isAndroid) {
+      return const BranchEntity(
+        name: 'refs/heads/main',
+        shortName: 'main',
+        tipSha: '0000000000000000000000000000000000000000',
+        isHead: true,
+        isRemote: false,
+      );
+    }
+
     final result = await _run(
       ['symbolic-ref', '--short', 'HEAD'],
       workingDirectory: repo.path,
@@ -299,6 +334,24 @@ class RealGitService implements GitService {
     int limit = 100,
     int offset = 0,
   }) async {
+    if (Platform.isAndroid) {
+      return [
+        CommitEntity(
+          sha: '0000000000000000000000000000000000000000',
+          shortSha: '0000000',
+          message: 'Initial Local Workspace\n\nOffline local editor mode activated on Android.',
+          summary: 'Initial Local Workspace',
+          author: const AuthorEntity(name: 'Furcate', email: 'android@furcate.app'),
+          committer: const AuthorEntity(name: 'Furcate', email: 'android@furcate.app'),
+          dateTime: DateTime.now(),
+          parentShas: const [],
+          isHead: true,
+          isMergeCommit: false,
+          refs: const [],
+        )
+      ];
+    }
+
     // Record separator to safely split multi-line messages.
     const recordSep = '---RECORD---';
     const fieldSep = '---FIELD---';
@@ -504,6 +557,33 @@ class RealGitService implements GitService {
 
   @override
   Future<WorkingCopyStatus> getStatus(GitRepo repo) async {
+    if (Platform.isAndroid) {
+      final unstaged = <FileStatusEntity>[];
+      final dir = Directory(repo.path);
+      if (await dir.exists()) {
+        try {
+          final list = dir.listSync(recursive: true);
+          for (final entity in list) {
+            if (entity is File) {
+              final relativePath = p.relative(entity.path, from: repo.path);
+              if (!relativePath.startsWith('.git') && !relativePath.contains('${p.separator}.git')) {
+                unstaged.add(FileStatusEntity(
+                  path: relativePath,
+                  status: FileChangeStatus.untracked,
+                  isNew: true,
+                ));
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      return WorkingCopyStatus(
+        stagedFiles: const [],
+        unstagedFiles: unstaged,
+        conflictedFiles: const [],
+      );
+    }
+
     final result = await _run(
       ['status', '--porcelain=v1', '-uall'],
       workingDirectory: repo.path,
@@ -678,6 +758,43 @@ class RealGitService implements GitService {
     String path, {
     bool staged = false,
   }) async {
+    if (Platform.isAndroid) {
+      final file = File('${repo.path}/$path');
+      final lines = <DiffLineEntity>[];
+      int lineCount = 0;
+      if (await file.exists()) {
+        try {
+          final content = await file.readAsString();
+          final contentLines = content.split('\n');
+          for (final line in contentLines) {
+            lineCount++;
+            lines.add(DiffLineEntity(
+              content: '+$line',
+              origin: DiffLineOrigin.addition,
+              newLineNumber: lineCount,
+            ));
+          }
+        } catch (_) {}
+      }
+      return FileDiffEntity(
+        path: path,
+        status: FileChangeStatus.untracked,
+        hunks: [
+          DiffHunkEntity(
+            oldStart: 0,
+            oldLines: 0,
+            newStart: 1,
+            newLines: lineCount,
+            header: '@@ -0,0 +1,$lineCount @@',
+            lines: lines,
+          ),
+        ],
+        isBinary: false,
+        addedLines: lineCount,
+        deletedLines: 0,
+      );
+    }
+
     final args = <String>['diff', '--submodule'];
     if (staged) args.add('--cached');
     args.addAll(['--', path]);
@@ -1119,6 +1236,8 @@ class RealGitService implements GitService {
 
   @override
   Future<List<TagEntity>> getTags(GitRepo repo) async {
+    if (Platform.isAndroid) return [];
+
     final result = await _run(
       ['tag', '-l', '--format=%(refname:short)%00%(objectname)%00%(objecttype)%00%(contents:subject)'],
       workingDirectory: repo.path,
@@ -1179,6 +1298,8 @@ class RealGitService implements GitService {
 
   @override
   Future<List<StashEntity>> getStashes(GitRepo repo) async {
+    if (Platform.isAndroid) return [];
+
     final result = await _run(
       ['stash', 'list', '--format=%H%x00%gd%x00%gs%x00%aI'],
       workingDirectory: repo.path,
@@ -1288,6 +1409,8 @@ class RealGitService implements GitService {
 
   @override
   Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo) async {
+    if (Platform.isAndroid) return [];
+
     final statusResult = await _run(
       ['submodule', 'status'],
       workingDirectory: repo.path,

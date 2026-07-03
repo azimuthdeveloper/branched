@@ -11,9 +11,21 @@ class WelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: FurcateTheme.darkBgPrimary,
-      body: Center(
+    return BlocListener<RepositoryManagerBloc, RepositoryManagerState>(
+      listenWhen: (previous, current) => current.error != null && current.error != previous.error,
+      listener: (context, state) {
+        if (state.error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(state.error!),
+              backgroundColor: Colors.red[900],
+            ),
+          );
+        }
+      },
+      child: Scaffold(
+        backgroundColor: FurcateTheme.darkBgPrimary,
+        body: Center(
         child: Container(
           width: 640,
           padding: const EdgeInsets.all(32.0),
@@ -153,8 +165,9 @@ class WelcomeScreen extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildActionCard(
     BuildContext context, {
