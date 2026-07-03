@@ -23,6 +23,7 @@ void main() {
     locator.registerLazySingleton<FilePickerService>(() => TestFilePickerService());
   });
 
+  testWidgets('Branch Merge Flow Test', (WidgetTester tester) async {
     final boundaryKey = GlobalKey();
 
     Future<void> capture(String name) async {

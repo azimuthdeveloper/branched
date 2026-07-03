@@ -52,6 +52,7 @@ dependencies:
   get_it: ^9.2.1
   intl: ^0.20.3
   file_picker: ^8.0.0
+  git2dart: ^0.5.0
 
 dev_dependencies:
   flutter_test:

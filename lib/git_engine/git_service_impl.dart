@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
+import 'dart:ffi';
+import 'package:ffi/ffi.dart';
+import 'package:git2dart_binaries/git2dart_binaries.dart';
+import 'package:git2dart/git2dart.dart';
 import 'git_models.dart';
 import 'git_service.dart';
 
@@ -24,6 +28,40 @@ class RealGitService implements GitService {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  CommitEntity _mapCommit(Commit c, {bool isHead = false, List<RefEntity> refs = const []}) {
+    final authorSig = c.author;
+    final committerSig = c.committer;
+    final parents = c.parents.map((p) => p.sha).toList();
+
+    return CommitEntity(
+      sha: c.oid.sha,
+      shortSha: c.oid.sha.substring(0, 7),
+      message: c.message,
+      summary: c.summary,
+      author: AuthorEntity(name: authorSig.name, email: authorSig.email),
+      committer: AuthorEntity(name: committerSig.name, email: committerSig.email),
+      dateTime: DateTime.fromMillisecondsSinceEpoch(c.time * 1000),
+      parentShas: parents,
+      isHead: isHead,
+      isMergeCommit: parents.length > 1,
+      refs: refs,
+    );
+  }
+
+  FileChangeStatus _mapStatusFlags(Set<GitStatus> flags, {required bool staged}) {
+    if (staged) {
+      if (flags.contains(GitStatus.indexNew)) return FileChangeStatus.added;
+      if (flags.contains(GitStatus.indexDeleted)) return FileChangeStatus.deleted;
+      if (flags.contains(GitStatus.indexRenamed)) return FileChangeStatus.renamed;
+      return FileChangeStatus.modified;
+    } else {
+      if (flags.contains(GitStatus.wtNew)) return FileChangeStatus.untracked;
+      if (flags.contains(GitStatus.wtDeleted)) return FileChangeStatus.deleted;
+      if (flags.contains(GitStatus.wtRenamed)) return FileChangeStatus.renamed;
+      return FileChangeStatus.modified;
+    }
+  }
 
   /// Runs a git command in [workingDirectory] and returns stdout as a string.
   /// Throws [GitException] when the process exits with a non-zero code, unless
@@ -66,40 +104,21 @@ class RealGitService implements GitService {
 
   @override
   Future<GitRepo> openRepository(String path) async {
-    final gitDir = Directory('$path/.git');
-    if (!await gitDir.exists()) {
-      if (Platform.isAndroid) {
-        // On Android, mock git repository structure by creating .git directory
-        await gitDir.create(recursive: true);
-      } else {
-        // It could be a bare repo; try rev-parse as fallback.
-        final result = await _run(
-          ['rev-parse', '--git-dir'],
-          workingDirectory: path,
-          allowFailure: true,
-        );
-        if (result.exitCode != 0) {
-          throw GitException('openRepository', 1, 'Not a git repository: $path');
-        }
-      }
-    }
-    final name = path
-        .split(Platform.pathSeparator)
-        .lastWhere((e) => e.isNotEmpty, orElse: () => 'repository');
+    final repo = Repository.open(path);
+    final name = p.basename(path);
+    repo.free();
     return GitRepo(path: path, name: name);
   }
 
   @override
   Future<bool> isGitRepository(String path) async {
-    final dir = Directory(path);
-    if (!await dir.exists()) return false;
-    if (Platform.isAndroid) return true; // On Android, treat any picked directory as a valid local repo
-    final result = await _run(
-      ['rev-parse', '--git-dir'],
-      workingDirectory: path,
-      allowFailure: true,
-    );
-    return result.exitCode == 0;
+    try {
+      final repo = Repository.open(path);
+      repo.free();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -110,48 +129,39 @@ class RealGitService implements GitService {
     String? password,
     void Function(double)? onProgress,
   }) async {
+    if (Platform.isAndroid) {
+      throw GitException(
+        'git clone',
+        127,
+        'Native Git CLI operations (such as cloning) are not supported on Android.',
+      );
+    }
     onProgress?.call(0.0);
-
-    // Build the effective URL with inline credentials when provided.
     String effectiveUrl = url;
     if (username != null && password != null) {
       final uri = Uri.parse(url);
       effectiveUrl = uri.replace(userInfo: '$username:$password').toString();
     }
-
     await _run(
       ['clone', '--progress', effectiveUrl, path],
       workingDirectory: Directory.current.path,
     );
-
     onProgress?.call(1.0);
-
-    final name = path
-        .split(Platform.pathSeparator)
-        .lastWhere((e) => e.isNotEmpty, orElse: () => 'cloned-repo');
+    final name = p.basename(path);
     return GitRepo(path: path, name: name);
   }
 
   @override
   Future<GitRepo> initRepository(String path, {bool bare = false}) async {
-    await Directory(path).create(recursive: true);
-    if (Platform.isAndroid) {
-      // On Android, mock git init by creating a .git folder
-      await Directory('$path/.git').create(recursive: true);
-    } else {
-      final args = ['init'];
-      if (bare) args.add('--bare');
-      await _run(args, workingDirectory: path);
-    }
-    final name = path
-        .split(Platform.pathSeparator)
-        .lastWhere((e) => e.isNotEmpty, orElse: () => 'new-repo');
+    final repo = Repository.init(path: path, bare: bare);
+    final name = p.basename(path);
+    repo.free();
     return GitRepo(path: path, name: name);
   }
 
   @override
   void disposeRepository(GitRepo repo) {
-    // Nothing to dispose for a CLI-based service.
+    // Nothing to dispose.
   }
 
   // ---------------------------------------------------------------------------
@@ -160,83 +170,42 @@ class RealGitService implements GitService {
 
   @override
   Future<List<BranchEntity>> getBranches(GitRepo repo) async {
-    return _parseBranches(repo, remote: false);
+    final r = Repository.open(repo.path);
+    final list = <BranchEntity>[];
+    try {
+      for (final b in r.branchesLocal) {
+        list.add(BranchEntity(
+          name: b.name,
+          shortName: b.name,
+          tipSha: b.target.sha,
+          isHead: b.isHead,
+          isRemote: false,
+        ));
+        b.free();
+      }
+    } catch (_) {}
+    r.free();
+    return list;
   }
 
   @override
   Future<List<BranchEntity>> getRemoteBranches(GitRepo repo) async {
-    return _parseBranches(repo, remote: true);
-  }
-
-  Future<List<BranchEntity>> _parseBranches(
-    GitRepo repo, {
-    required bool remote,
-  }) async {
-    if (Platform.isAndroid) {
-      if (remote) return [];
-      return [
-        const BranchEntity(
-          name: 'refs/heads/main',
-          shortName: 'main',
-          tipSha: '0000000000000000000000000000000000000000',
-          isHead: true,
-          isRemote: false,
-        )
-      ];
-    }
-
-    // Use null-byte separators for robust parsing.
-    // Fields: refname, refname:short, objectname, HEAD, upstream, upstream:track
-    const format =
-        '%(refname)%00%(refname:short)%00%(objectname)%00%(HEAD)%00%(upstream)%00%(upstream:track)';
-    final refsPrefix = remote ? 'refs/remotes/' : 'refs/heads/';
-    final result = await _run(
-      ['for-each-ref', '--format=$format', refsPrefix],
-      workingDirectory: repo.path,
-    );
-
-    final lines = _stdout(result).trim().split('\n');
-    final branches = <BranchEntity>[];
-    for (final line in lines) {
-      if (line.trim().isEmpty) continue;
-      final parts = line.split('\x00');
-      if (parts.length < 6) continue;
-
-      final refName = parts[0];
-      final shortName = parts[1];
-      final sha = parts[2];
-      final isHead = parts[3].trim() == '*';
-      final upstream = parts[4].isNotEmpty ? parts[4] : null;
-
-      // upstream:track looks like "[ahead 2, behind 1]" or "[ahead 2]" etc.
-      int? ahead;
-      int? behind;
-      final trackInfo = parts[5].trim();
-      if (trackInfo.isNotEmpty) {
-        final aheadMatch = RegExp(r'ahead\s+(\d+)').firstMatch(trackInfo);
-        final behindMatch = RegExp(r'behind\s+(\d+)').firstMatch(trackInfo);
-        if (aheadMatch != null) ahead = int.parse(aheadMatch.group(1)!);
-        if (behindMatch != null) behind = int.parse(behindMatch.group(1)!);
+    final r = Repository.open(repo.path);
+    final list = <BranchEntity>[];
+    try {
+      for (final b in r.branchesRemote) {
+        list.add(BranchEntity(
+          name: b.name,
+          shortName: b.name,
+          tipSha: b.target.sha,
+          isHead: b.isHead,
+          isRemote: true,
+        ));
+        b.free();
       }
-
-      // Derive tracking branch short name from the upstream ref.
-      String? trackingBranch;
-      if (upstream != null && upstream.isNotEmpty) {
-        trackingBranch = upstream.replaceFirst('refs/remotes/', '');
-      }
-
-      branches.add(BranchEntity(
-        name: refName.replaceFirst(refsPrefix, ''),
-        shortName: shortName,
-        tipSha: sha,
-        isHead: isHead,
-        isRemote: remote,
-        trackingBranch: trackingBranch,
-        ahead: ahead,
-        behind: behind,
-      ));
-    }
-    return branches;
+    } catch (_) {}
+    r.free();
+    return list;
   }
 
   @override
@@ -245,13 +214,22 @@ class RealGitService implements GitService {
     String name, {
     String? startPoint,
   }) async {
-    final args = ['branch', name];
-    if (startPoint != null) args.add(startPoint);
-    await _run(args, workingDirectory: repo.path);
-
-    // Return the newly created branch by reading it back.
-    final all = await getBranches(repo);
-    return all.firstWhere((b) => b.name == name);
+    final r = Repository.open(repo.path);
+    final target = startPoint != null 
+        ? Commit.lookup(repo: r, oid: Oid.fromSHA(r, startPoint)) 
+        : Commit.lookup(repo: r, oid: r.head.target);
+    final branch = Branch.create(repo: r, name: name, target: target);
+    final entity = BranchEntity(
+      name: branch.name,
+      shortName: branch.name,
+      tipSha: target.oid.sha,
+      isHead: false,
+      isRemote: false,
+    );
+    branch.free();
+    target.free();
+    r.free();
+    return entity;
   }
 
   @override
@@ -260,67 +238,58 @@ class RealGitService implements GitService {
     String name, {
     bool force = false,
   }) async {
-    await _run(
-      ['branch', force ? '-D' : '-d', name],
-      workingDirectory: repo.path,
-    );
+    final r = Repository.open(repo.path);
+    Branch.delete(repo: r, name: name);
+    r.free();
   }
 
   @override
   Future<void> renameBranch(GitRepo repo, String oldName, String newName) async {
-    await _run(['branch', '-m', oldName, newName], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Branch.rename(repo: r, oldName: oldName, newName: newName);
+    r.free();
   }
 
   @override
   Future<void> checkoutBranch(GitRepo repo, String name) async {
-    await _run(['checkout', name], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final fullRefName = name.startsWith('refs/') ? name : 'refs/heads/$name';
+    final ref = Reference.create(
+      repo: r,
+      name: 'HEAD',
+      target: fullRefName,
+      force: true,
+    );
+    ref.free();
+    Checkout.head(repo: r, strategy: {GitCheckout.force});
+    r.free();
   }
 
   @override
   Future<BranchEntity> getCurrentBranch(GitRepo repo) async {
-    if (Platform.isAndroid) {
+    final r = Repository.open(repo.path);
+    try {
+      final head = r.head;
+      final entity = BranchEntity(
+        name: head.name,
+        shortName: head.shorthand,
+        tipSha: head.target.sha,
+        isHead: true,
+        isRemote: false,
+      );
+      head.free();
+      r.free();
+      return entity;
+    } catch (_) {
+      r.free();
       return const BranchEntity(
         name: 'refs/heads/main',
         shortName: 'main',
-        tipSha: '0000000000000000000000000000000000000000',
-        isHead: true,
-        isRemote: false,
-      );
-    }
-
-    final result = await _run(
-      ['symbolic-ref', '--short', 'HEAD'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    final branchName = _stdout(result).trim();
-    if (result.exitCode != 0 || branchName.isEmpty) {
-      // Detached HEAD – use sha instead.
-      final shaResult = await _run(
-        ['rev-parse', 'HEAD'],
-        workingDirectory: repo.path,
-      );
-      final sha = _stdout(shaResult).trim();
-      return BranchEntity(
-        name: sha,
-        shortName: sha.substring(0, 7),
-        tipSha: sha,
-        isHead: true,
-        isRemote: false,
-      );
-    }
-
-    final all = await getBranches(repo);
-    return all.firstWhere(
-      (b) => b.shortName == branchName || b.name == branchName,
-      orElse: () => BranchEntity(
-        name: branchName,
-        shortName: branchName,
         tipSha: '',
         isHead: true,
         isRemote: false,
-      ),
-    );
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -334,202 +303,108 @@ class RealGitService implements GitService {
     int limit = 100,
     int offset = 0,
   }) async {
-    if (Platform.isAndroid) {
-      return [
-        CommitEntity(
-          sha: '0000000000000000000000000000000000000000',
-          shortSha: '0000000',
-          message: 'Initial Local Workspace\n\nOffline local editor mode activated on Android.',
-          summary: 'Initial Local Workspace',
-          author: const AuthorEntity(name: 'Furcate', email: 'android@furcate.app'),
-          committer: const AuthorEntity(name: 'Furcate', email: 'android@furcate.app'),
-          dateTime: DateTime.now(),
-          parentShas: const [],
-          isHead: true,
-          isMergeCommit: false,
-          refs: const [],
-        )
-      ];
-    }
+    final r = Repository.open(repo.path);
+    final walker = RevWalk(r);
+    walker.sorting({GitSort.topological, GitSort.time});
 
-    // Record separator to safely split multi-line messages.
-    const recordSep = '---RECORD---';
-    const fieldSep = '---FIELD---';
-    // Fields: sha, short sha, subject, body, author name, author email,
-    //         committer name, committer email, date (ISO), parent shas, decorate
-    const format =
-        '%H$fieldSep%h$fieldSep%s$fieldSep%b$fieldSep%an$fieldSep%ae$fieldSep%cn$fieldSep%ce$fieldSep%aI$fieldSep%P$fieldSep%D$recordSep';
-
-    final args = ['log'];
-    if (branch != null) {
-      args.add(branch);
-    } else {
-      args.addAll(['--all', '--date-order']);
-    }
-    args.addAll([
-      '--format=$format',
-      '--skip=$offset',
-      '-n',
-      '$limit',
-    ]);
-
-    final result = await _run(args, workingDirectory: repo.path, allowFailure: true);
-    if (result.exitCode != 0) return [];
-
-    final raw = _stdout(result);
-    final records = raw.split(recordSep);
-    final commits = <CommitEntity>[];
-
-    // Determine current HEAD sha for isHead marking.
-    String? headSha;
-    final headResult = await _run(
-      ['rev-parse', 'HEAD'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    if (headResult.exitCode == 0) {
-      headSha = _stdout(headResult).trim();
-    }
-
-    for (final record in records) {
-      final trimmed = record.trim();
-      if (trimmed.isEmpty) continue;
-      final fields = trimmed.split(fieldSep);
-      if (fields.length < 11) continue;
-
-      final sha = fields[0].trim();
-      final shortSha = fields[1].trim();
-      final subject = fields[2].trim();
-      final body = fields[3].trim();
-      final authorName = fields[4].trim();
-      final authorEmail = fields[5].trim();
-      final committerName = fields[6].trim();
-      final committerEmail = fields[7].trim();
-      final dateStr = fields[8].trim();
-      final parentStr = fields[9].trim();
-      final decorateStr = fields[10].trim();
-
-      final parentShas =
-          parentStr.isEmpty ? <String>[] : parentStr.split(' ').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-
-      final message = body.isNotEmpty ? '$subject\n\n$body' : subject;
-
-      final refs = _parseDecorateRefs(decorateStr);
-
-      commits.add(CommitEntity(
-        sha: sha,
-        shortSha: shortSha,
-        message: message,
-        summary: subject,
-        author: AuthorEntity(name: authorName, email: authorEmail),
-        committer: AuthorEntity(name: committerName, email: committerEmail),
-        dateTime: DateTime.tryParse(dateStr) ?? DateTime.now(),
-        parentShas: parentShas,
-        isHead: sha == headSha,
-        isMergeCommit: parentShas.length > 1,
-        refs: refs,
-      ));
-    }
-    return commits;
-  }
-
-  List<RefEntity> _parseDecorateRefs(String decorateStr) {
-    if (decorateStr.isEmpty) return [];
-    final refs = <RefEntity>[];
-    // Format: "HEAD -> main, origin/main, tag: v1.0"
-    final parts = decorateStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty);
-    for (var part in parts) {
-      // Strip "HEAD -> " prefix
-      part = part.replaceFirst(RegExp(r'^HEAD\s*->\s*'), '');
-      if (part == 'HEAD') continue;
-
-      if (part.startsWith('tag: ')) {
-        refs.add(RefEntity(name: part.substring(5).trim(), type: 'tag'));
-      } else if (part.contains('/')) {
-        // Could be a remote ref like "origin/main"
-        final slashIndex = part.indexOf('/');
-        final remoteName = part.substring(0, slashIndex);
-        refs.add(RefEntity(name: part, type: 'remote', remote: remoteName));
+    try {
+      if (branch != null) {
+        final refName = branch.startsWith('refs/') ? branch : 'refs/heads/$branch';
+        final ref = Reference.lookup(repo: r, name: refName);
+        walker.push(ref.target);
+        ref.free();
       } else {
-        refs.add(RefEntity(name: part, type: 'local'));
+        walker.push(r.head.target);
+      }
+    } catch (_) {
+      try {
+        walker.push(r.head.target);
+      } catch (_) {
+        walker.free();
+        r.free();
+        return [];
       }
     }
-    return refs;
+
+    String? headSha;
+    try {
+      headSha = r.head.target.sha;
+    } catch (_) {}
+
+    final refsMap = <String, List<RefEntity>>{};
+    try {
+      for (final b in r.branchesLocal) {
+        final sha = b.target.sha;
+        refsMap.putIfAbsent(sha, () => []).add(RefEntity(
+          name: b.name,
+          type: 'local',
+        ));
+        b.free();
+      }
+      for (final b in r.branchesRemote) {
+        final sha = b.target.sha;
+        final parts = b.name.split('/');
+        final remoteName = parts.isNotEmpty ? parts.first : null;
+        refsMap.putIfAbsent(sha, () => []).add(RefEntity(
+          name: b.name,
+          type: 'remote',
+          remote: remoteName,
+        ));
+        b.free();
+      }
+      for (final tagName in r.tags) {
+        try {
+          final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
+          final sha = ref.target.sha;
+          ref.free();
+          refsMap.putIfAbsent(sha, () => []).add(RefEntity(
+            name: tagName,
+            type: 'tag',
+          ));
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    final commits = <CommitEntity>[];
+    try {
+      final walkCommits = walker.walk();
+      final start = offset;
+      final end = (offset + limit < walkCommits.length) ? offset + limit : walkCommits.length;
+
+      for (int i = start; i < end; i++) {
+        final c = walkCommits[i];
+        final sha = c.oid.sha;
+        commits.add(_mapCommit(
+          c,
+          isHead: sha == headSha,
+          refs: refsMap[sha] ?? const [],
+        ));
+      }
+
+      for (final c in walkCommits) {
+        c.free();
+      }
+    } catch (_) {}
+
+    walker.free();
+    r.free();
+    return commits;
   }
 
   @override
   Future<CommitEntity> getCommit(GitRepo repo, String sha) async {
-    // Record separator to safely split multi-line messages.
-    const recordSep = '---RECORD---';
-    const fieldSep = '---FIELD---';
-    // Fields: sha, short sha, subject, body, author name, author email,
-    //         committer name, committer email, date (ISO), parent shas, decorate
-    const format =
-        '%H$fieldSep%h$fieldSep%s$fieldSep%b$fieldSep%an$fieldSep%ae$fieldSep%cn$fieldSep%ce$fieldSep%aI$fieldSep%P$fieldSep%D$recordSep';
+    final r = Repository.open(repo.path);
+    final commit = Commit.lookup(repo: r, oid: Oid.fromSHA(r, sha));
 
-    final result = await _run(
-      ['log', '-1', '--format=$format', sha],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    if (result.exitCode != 0) {
-      throw GitException('getCommit', result.exitCode, (result.stderr as String).trim());
-    }
-
-    final raw = _stdout(result);
-    final records = raw.split(recordSep);
-
-    // Determine current HEAD sha for isHead marking.
     String? headSha;
-    final headResult = await _run(
-      ['rev-parse', 'HEAD'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    if (headResult.exitCode == 0) {
-      headSha = _stdout(headResult).trim();
-    }
+    try {
+      headSha = r.head.target.sha;
+    } catch (_) {}
 
-    for (final record in records) {
-      final trimmed = record.trim();
-      if (trimmed.isEmpty) continue;
-      final fields = trimmed.split(fieldSep);
-      if (fields.length < 11) continue;
-
-      final commitSha = fields[0].trim();
-      final shortSha = fields[1].trim();
-      final subject = fields[2].trim();
-      final body = fields[3].trim();
-      final authorName = fields[4].trim();
-      final authorEmail = fields[5].trim();
-      final committerName = fields[6].trim();
-      final committerEmail = fields[7].trim();
-      final dateStr = fields[8].trim();
-      final parentStr = fields[9].trim();
-      final decorateStr = fields[10].trim();
-
-      final parentShas =
-          parentStr.isEmpty ? <String>[] : parentStr.split(' ').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-
-      final message = body.isNotEmpty ? '$subject\n\n$body' : subject;
-
-      final refs = _parseDecorateRefs(decorateStr);
-
-      return CommitEntity(
-        sha: commitSha,
-        shortSha: shortSha,
-        message: message,
-        summary: subject,
-        author: AuthorEntity(name: authorName, email: authorEmail),
-        committer: AuthorEntity(name: committerName, email: committerEmail),
-        dateTime: DateTime.tryParse(dateStr) ?? DateTime.now(),
-        parentShas: parentShas,
-        isHead: commitSha == headSha,
-        isMergeCommit: parentShas.length > 1,
-        refs: refs,
-      );
-    }
-    throw GitException('getCommit', 1, 'Commit $sha not found');
+    final entity = _mapCommit(commit, isHead: sha == headSha);
+    commit.free();
+    r.free();
+    return entity;
   }
 
   @override
@@ -539,16 +414,46 @@ class RealGitService implements GitService {
     AuthorEntity? author,
     bool amend = false,
   }) async {
-    final args = ['commit', '-m', message];
-    if (amend) args.add('--amend');
-    if (author != null) {
-      args.addAll(['--author', '${author.name} <${author.email}>']);
-    }
-    await _run(args, workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final index = r.index;
+    final treeOid = index.writeTree();
+    final tree = Tree.lookup(repo: r, oid: treeOid);
 
-    // Read the newly created commit back.
-    final commits = await getCommitHistory(repo, limit: 1);
-    return commits.first;
+    final signatureName = author?.name ?? 'Furcate User';
+    final signatureEmail = author?.email ?? 'user@furcate.app';
+    final signature = Signature.create(
+      name: signatureName,
+      email: signatureEmail,
+      time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+
+    final parents = <Commit>[];
+    try {
+      parents.add(Commit.lookup(repo: r, oid: r.head.target));
+    } catch (_) {}
+
+    final commitOid = Commit.create(
+      repo: r,
+      updateRef: 'HEAD',
+      message: message,
+      author: signature,
+      committer: signature,
+      tree: tree,
+      parents: parents,
+    );
+
+    final commit = Commit.lookup(repo: r, oid: commitOid);
+    final entity = _mapCommit(commit, isHead: true);
+
+    commit.free();
+    for (final p in parents) {
+      p.free();
+    }
+    tree.free();
+    index.free();
+    r.free();
+
+    return entity;
   }
 
   // ---------------------------------------------------------------------------
@@ -557,195 +462,164 @@ class RealGitService implements GitService {
 
   @override
   Future<WorkingCopyStatus> getStatus(GitRepo repo) async {
-    if (Platform.isAndroid) {
-      final unstaged = <FileStatusEntity>[];
-      final dir = Directory(repo.path);
-      if (await dir.exists()) {
-        try {
-          final list = dir.listSync(recursive: true);
-          for (final entity in list) {
-            if (entity is File) {
-              final relativePath = p.relative(entity.path, from: repo.path);
-              if (!relativePath.startsWith('.git') && !relativePath.contains('${p.separator}.git')) {
-                unstaged.add(FileStatusEntity(
-                  path: relativePath,
-                  status: FileChangeStatus.untracked,
-                  isNew: true,
-                ));
-              }
-            }
-          }
-        } catch (_) {}
-      }
-      return WorkingCopyStatus(
-        stagedFiles: const [],
-        unstagedFiles: unstaged,
-        conflictedFiles: const [],
-      );
-    }
-
-    final result = await _run(
-      ['status', '--porcelain=v1', '-uall'],
-      workingDirectory: repo.path,
-    );
-
+    final r = Repository.open(repo.path);
     final staged = <FileStatusEntity>[];
     final unstaged = <FileStatusEntity>[];
     final conflicted = <FileStatusEntity>[];
 
-    final lines = _stdout(result).split('\n');
-    for (final line in lines) {
-      if (line.length < 3) continue; // "XY path" is the minimum
+    using((arena) {
+      final out = arena<Pointer<git_status_list>>();
+      final opts = arena<git_status_options>();
+      
+      libgit2.git_status_options_init(opts, 1);
+      
+      // GIT_STATUS_OPT_INCLUDE_UNTRACKED = 1
+      // GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS = 2
+      // GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX = 4
+      // GIT_STATUS_OPT_RENAMES_INDEX_TO_WORKDIR = 8
+      opts.ref.flags = 1 | 2 | 4 | 8;
+      
+      final error = libgit2.git_status_list_new(out, r.pointer, opts);
+      if (error == 0) {
+        final count = libgit2.git_status_list_entrycount(out.value);
+        for (var i = 0; i < count; i++) {
+          final entry = libgit2.git_status_byindex(out.value, i);
+          
+          var delta = entry.ref.index_to_workdir;
+          if (entry.ref.head_to_index != nullptr) {
+            delta = entry.ref.head_to_index;
+          }
+          
+          final isRenamed = (delta.ref.flags & 4) != 0;
+          final filePath = isRenamed
+              ? delta.ref.new_file.path.cast<Utf8>().toDartString()
+              : delta.ref.old_file.path.cast<Utf8>().toDartString();
+              
+          final statusAsInt = entry.ref.statusAsInt;
+          final statusFlags = GitStatus.values
+              .skip(1)
+              .where((e) => (statusAsInt & e.value) != 0)
+              .toSet();
+              
+          // Staged
+          if (statusFlags.contains(GitStatus.indexNew) ||
+              statusFlags.contains(GitStatus.indexModified) ||
+              statusFlags.contains(GitStatus.indexDeleted) ||
+              statusFlags.contains(GitStatus.indexRenamed) ||
+              statusFlags.contains(GitStatus.indexTypeChange)) {
+            staged.add(FileStatusEntity(
+              path: filePath,
+              status: _mapStatusFlags(statusFlags, staged: true),
+              isNew: statusFlags.contains(GitStatus.indexNew),
+              isRenamed: statusFlags.contains(GitStatus.indexRenamed),
+            ));
+          }
 
-      final indexChar = line[0]; // staging area status
-      final worktreeChar = line[1]; // working tree status
-      final rest = line.substring(3); // skip "XY "
+          // Unstaged / Working Tree
+          if (statusFlags.contains(GitStatus.wtNew) ||
+              statusFlags.contains(GitStatus.wtModified) ||
+              statusFlags.contains(GitStatus.wtDeleted) ||
+              statusFlags.contains(GitStatus.wtTypeChange) ||
+              statusFlags.contains(GitStatus.wtRenamed)) {
+            unstaged.add(FileStatusEntity(
+              path: filePath,
+              status: _mapStatusFlags(statusFlags, staged: false),
+              isNew: statusFlags.contains(GitStatus.wtNew),
+              isRenamed: statusFlags.contains(GitStatus.wtRenamed),
+            ));
+          }
 
-      // Handle renames – path contains " -> "
-      String filePath;
-      String? oldPath;
-      if (rest.contains(' -> ')) {
-        final parts = rest.split(' -> ');
-        oldPath = parts[0].trim();
-        filePath = parts[1].trim();
-      } else {
-        filePath = rest.trim();
+          // Conflicted
+          if (statusFlags.contains(GitStatus.conflicted)) {
+            conflicted.add(FileStatusEntity(
+              path: filePath,
+              status: FileChangeStatus.conflicted,
+            ));
+          }
+        }
+        libgit2.git_status_list_free(out.value);
       }
+    });
 
-      // Detect conflicts: UU, AA, DD, AU, UA, DU, UD
-      if (_isConflict(indexChar, worktreeChar)) {
-        conflicted.add(FileStatusEntity(
-          path: filePath,
-          status: FileChangeStatus.conflicted,
-          oldPath: oldPath,
-        ));
-        continue;
-      }
-
-      // Untracked
-      if (indexChar == '?' && worktreeChar == '?') {
-        unstaged.add(FileStatusEntity(
-          path: filePath,
-          status: FileChangeStatus.untracked,
-          isNew: true,
-        ));
-        continue;
-      }
-
-      // Staged changes (index char is significant)
-      if (indexChar != ' ' && indexChar != '?') {
-        staged.add(FileStatusEntity(
-          path: filePath,
-          status: _charToStatus(indexChar),
-          isNew: indexChar == 'A',
-          isRenamed: indexChar == 'R',
-          oldPath: oldPath,
-        ));
-      }
-
-      // Worktree changes (worktree char is significant)
-      if (worktreeChar != ' ' && worktreeChar != '?') {
-        unstaged.add(FileStatusEntity(
-          path: filePath,
-          status: _charToStatus(worktreeChar),
-        ));
-      }
-    }
-
+    r.free();
     return WorkingCopyStatus(
-      unstagedFiles: unstaged,
       stagedFiles: staged,
+      unstagedFiles: unstaged,
       conflictedFiles: conflicted,
     );
   }
 
-  bool _isConflict(String index, String worktree) {
-    return (index == 'U' || worktree == 'U') ||
-        (index == 'A' && worktree == 'A') ||
-        (index == 'D' && worktree == 'D');
-  }
-
-  FileChangeStatus _charToStatus(String c) {
-    switch (c) {
-      case 'M':
-        return FileChangeStatus.modified;
-      case 'A':
-        return FileChangeStatus.added;
-      case 'D':
-        return FileChangeStatus.deleted;
-      case 'R':
-        return FileChangeStatus.renamed;
-      case 'C':
-        return FileChangeStatus.copied;
-      case 'U':
-        return FileChangeStatus.conflicted;
-      case '?':
-        return FileChangeStatus.untracked;
-      default:
-        return FileChangeStatus.modified;
-    }
-  }
-
   @override
   Future<void> stageFile(GitRepo repo, String path) async {
-    await _run(['add', '--', path], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final index = r.index;
+    index.add(path);
+    index.write();
+    index.free();
+    r.free();
   }
 
   @override
   Future<void> unstageFile(GitRepo repo, String path) async {
-    await _run(
-      ['reset', 'HEAD', '--', path],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
+    final r = Repository.open(repo.path);
+    try {
+      r.resetDefault(oid: r.head.target, pathspec: [path]);
+    } catch (_) {}
+    r.free();
   }
 
   @override
   Future<void> stageAll(GitRepo repo) async {
-    await _run(['add', '-A'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final index = r.index;
+    final statusMap = r.status;
+    for (final path in statusMap.keys) {
+      index.add(path);
+    }
+    index.write();
+    index.free();
+    r.free();
   }
 
   @override
   Future<void> unstageAll(GitRepo repo) async {
-    await _run(
-      ['reset', 'HEAD'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
+    final r = Repository.open(repo.path);
+    try {
+      r.resetDefault(oid: r.head.target, pathspec: ['*']);
+    } catch (_) {}
+    r.free();
   }
 
   @override
   Future<void> discardFile(GitRepo repo, String path) async {
-    // Try checkout for tracked files; use clean for untracked.
-    final checkoutResult = await _run(
-      ['checkout', '--', path],
-      workingDirectory: repo.path,
-      allowFailure: true,
+    final r = Repository.open(repo.path);
+    Checkout.head(
+      repo: r,
+      paths: [path],
+      strategy: {GitCheckout.force},
     );
-    if (checkoutResult.exitCode != 0) {
-      await _run(
-        ['clean', '-f', '--', path],
-        workingDirectory: repo.path,
-      );
-    }
+    r.free();
   }
 
   @override
   Future<void> discardAll(GitRepo repo) async {
-    await _run(['checkout', '--', '.'], workingDirectory: repo.path, allowFailure: true);
-    await _run(['clean', '-fd'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Checkout.head(
+      repo: r,
+      strategy: {GitCheckout.force},
+    );
+    r.free();
   }
 
   Future<List<String>> discardAllPreview(GitRepo repo) async {
-    final result = await _run(['clean', '-fdn'], workingDirectory: repo.path);
-    final raw = _stdout(result).trim();
-    if (raw.isEmpty) return [];
-    return raw.split('\n').map((line) {
-      if (line.startsWith('Would remove ')) {
-        return line.substring('Would remove '.length).trim();
-      }
-      return line.trim();
-    }).toList();
+    final r = Repository.open(repo.path);
+    final statusMap = r.status;
+    final list = statusMap.entries
+        .where((e) => e.value.contains(GitStatus.wtNew) || e.value.contains(GitStatus.wtModified))
+        .map((e) => e.key)
+        .toList();
+    r.free();
+    return list;
   }
 
   // ---------------------------------------------------------------------------
@@ -758,118 +632,36 @@ class RealGitService implements GitService {
     String path, {
     bool staged = false,
   }) async {
-    if (Platform.isAndroid) {
-      final file = File('${repo.path}/$path');
-      final lines = <DiffLineEntity>[];
-      int lineCount = 0;
-      if (await file.exists()) {
-        try {
-          final content = await file.readAsString();
-          final contentLines = content.split('\n');
-          for (final line in contentLines) {
-            lineCount++;
-            lines.add(DiffLineEntity(
-              content: '+$line',
-              origin: DiffLineOrigin.addition,
-              newLineNumber: lineCount,
-            ));
-          }
-        } catch (_) {}
+    final r = Repository.open(repo.path);
+    final index = r.index;
+    
+    Diff diff;
+    if (staged) {
+      try {
+        final headCommit = Commit.lookup(repo: r, oid: r.head.target);
+        diff = Diff.treeToIndex(repo: r, tree: headCommit.tree, index: index);
+        headCommit.free();
+      } catch (_) {
+        // Initial repository, diff against empty index
+        diff = Diff.indexToWorkdir(repo: r, index: index);
       }
-      return FileDiffEntity(
-        path: path,
-        status: FileChangeStatus.untracked,
-        hunks: [
-          DiffHunkEntity(
-            oldStart: 0,
-            oldLines: 0,
-            newStart: 1,
-            newLines: lineCount,
-            header: '@@ -0,0 +1,$lineCount @@',
-            lines: lines,
-          ),
-        ],
-        isBinary: false,
-        addedLines: lineCount,
-        deletedLines: 0,
-      );
+    } else {
+      diff = Diff.indexToWorkdir(repo: r, index: index);
     }
 
-    final args = <String>['diff', '--submodule'];
-    if (staged) args.add('--cached');
-    args.addAll(['--', path]);
-
-    final result = await _run(args, workingDirectory: repo.path, allowFailure: true);
-    final raw = _stdout(result);
-
-    if (raw.trim().isEmpty) {
-      // No diff (could be untracked). For untracked, diff against /dev/null.
-      final untrackedResult = await _run(
-        ['diff', '--no-index', '/dev/null', path],
-        workingDirectory: repo.path,
-        allowFailure: true,
-      );
-      final untrackedRaw = _stdout(untrackedResult);
-      if (untrackedRaw.trim().isEmpty) {
-        return FileDiffEntity(
-          path: path,
-          status: FileChangeStatus.modified,
-          hunks: const [],
-          isBinary: false,
-          addedLines: 0,
-          deletedLines: 0,
-        );
+    int deltaIndex = -1;
+    for (var i = 0; i < diff.deltas.length; i++) {
+      final delta = diff.deltas[i];
+      if (delta.newFile.path == path || delta.oldFile.path == path) {
+        deltaIndex = i;
+        break;
       }
-      return _parseSingleFileDiff(untrackedRaw, fallbackPath: path);
     }
 
-    return _parseSingleFileDiff(raw, fallbackPath: path);
-  }
-
-  @override
-  Future<List<FileDiffEntity>> getCommitDiff(GitRepo repo, String sha) async {
-    // For the root commit (no parents), diff against an empty tree.
-    final commitResult = await _run(
-      ['rev-parse', '$sha^'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    final List<String> args;
-    if (commitResult.exitCode != 0) {
-      // Root commit – diff against empty tree.
-      const emptyTree = '4b825dc642cb6eb9a060e54bf899d69f7cb46901';
-      args = ['diff', emptyTree, sha];
-    } else {
-      args = ['diff', '$sha^', sha];
-    }
-
-    final result = await _run(args, workingDirectory: repo.path);
-    final raw = _stdout(result);
-    return _parseMultiFileDiff(raw);
-  }
-
-  @override
-  Future<FileDiffEntity> getFileDiffForCommit(
-    GitRepo repo,
-    String sha,
-    String path,
-  ) async {
-    final commitResult = await _run(
-      ['rev-parse', '$sha^'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    final List<String> args;
-    if (commitResult.exitCode != 0) {
-      const emptyTree = '4b825dc642cb6eb9a060e54bf899d69f7cb46901';
-      args = ['diff', emptyTree, sha, '--', path];
-    } else {
-      args = ['diff', '$sha^', sha, '--', path];
-    }
-
-    final result = await _run(args, workingDirectory: repo.path, allowFailure: true);
-    final raw = _stdout(result);
-    if (raw.trim().isEmpty) {
+    if (deltaIndex == -1) {
+      index.free();
+      diff.free();
+      r.free();
       return FileDiffEntity(
         path: path,
         status: FileChangeStatus.modified,
@@ -879,7 +671,98 @@ class RealGitService implements GitService {
         deletedLines: 0,
       );
     }
-    return _parseSingleFileDiff(raw, fallbackPath: path);
+
+    final patch = Patch.fromDiff(diff: diff, index: deltaIndex);
+    final patchText = patch.text;
+    
+    final entity = _parseSingleFileDiff(patchText, fallbackPath: path);
+    
+    patch.free();
+    diff.free();
+    index.free();
+    r.free();
+    return entity;
+  }
+
+  @override
+  Future<List<FileDiffEntity>> getCommitDiff(GitRepo repo, String sha) async {
+    final r = Repository.open(repo.path);
+    final commit = Commit.lookup(repo: r, oid: Oid.fromSHA(r, sha));
+    
+    Diff diff;
+    if (commit.parents.isNotEmpty) {
+      final parentOid = commit.parents.first;
+      final parentCommit = Commit.lookup(repo: r, oid: parentOid);
+      diff = Diff.treeToTree(repo: r, oldTree: parentCommit.tree, newTree: commit.tree);
+      parentCommit.free();
+    } else {
+      diff = Diff.treeToTree(repo: r, oldTree: null, newTree: commit.tree);
+    }
+
+    final diffs = <FileDiffEntity>[];
+    for (var i = 0; i < diff.deltas.length; i++) {
+      final patch = Patch.fromDiff(diff: diff, index: i);
+      final path = diff.deltas[i].newFile.path;
+      diffs.add(_parseSingleFileDiff(patch.text, fallbackPath: path));
+      patch.free();
+    }
+
+    diff.free();
+    commit.free();
+    r.free();
+    return diffs;
+  }
+
+  @override
+  Future<FileDiffEntity> getFileDiffForCommit(
+    GitRepo repo,
+    String sha,
+    String path,
+  ) async {
+    final r = Repository.open(repo.path);
+    final commit = Commit.lookup(repo: r, oid: Oid.fromSHA(r, sha));
+    
+    Diff diff;
+    if (commit.parents.isNotEmpty) {
+      final parentOid = commit.parents.first;
+      final parentCommit = Commit.lookup(repo: r, oid: parentOid);
+      diff = Diff.treeToTree(repo: r, oldTree: parentCommit.tree, newTree: commit.tree);
+      parentCommit.free();
+    } else {
+      diff = Diff.treeToTree(repo: r, oldTree: null, newTree: commit.tree);
+    }
+
+    int deltaIndex = -1;
+    for (var i = 0; i < diff.deltas.length; i++) {
+      final d = diff.deltas[i];
+      if (d.newFile.path == path || d.oldFile.path == path) {
+        deltaIndex = i;
+        break;
+      }
+    }
+
+    if (deltaIndex == -1) {
+      diff.free();
+      commit.free();
+      r.free();
+      return FileDiffEntity(
+        path: path,
+        status: FileChangeStatus.modified,
+        hunks: const [],
+        isBinary: false,
+        addedLines: 0,
+        deletedLines: 0,
+      );
+    }
+
+    final patch = Patch.fromDiff(diff: diff, index: deltaIndex);
+    final entity = _parseSingleFileDiff(patch.text, fallbackPath: path);
+
+    patch.free();
+    diff.free();
+    commit.free();
+    r.free();
+    return entity;
   }
 
   // ---- Diff parsing helpers ----
@@ -1236,33 +1119,39 @@ class RealGitService implements GitService {
 
   @override
   Future<List<TagEntity>> getTags(GitRepo repo) async {
-    if (Platform.isAndroid) return [];
-
-    final result = await _run(
-      ['tag', '-l', '--format=%(refname:short)%00%(objectname)%00%(objecttype)%00%(contents:subject)'],
-      workingDirectory: repo.path,
-    );
-    final raw = _stdout(result).trim();
-    if (raw.isEmpty) return [];
-
-    final lines = raw.split('\n');
+    final r = Repository.open(repo.path);
     final tags = <TagEntity>[];
-    for (final line in lines) {
-      if (line.trim().isEmpty) continue;
-      final parts = line.split('\x00');
-      if (parts.length < 4) continue;
-      final name = parts[0].trim();
-      final sha = parts[1].trim();
-      final objType = parts[2].trim();
-      final subject = parts[3].trim();
-      final isAnnotated = objType == 'tag';
-      tags.add(TagEntity(
-        name: name,
-        sha: sha,
-        message: isAnnotated && subject.isNotEmpty ? subject : null,
-        isAnnotated: isAnnotated,
-      ));
-    }
+    try {
+      for (final tagName in r.tags) {
+        try {
+          final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
+          final targetOid = ref.target;
+          ref.free();
+
+          final tag = Tag.lookup(repo: r, oid: targetOid);
+          tags.add(TagEntity(
+            name: tag.name,
+            sha: tag.targetOid.sha,
+            message: tag.message,
+            isAnnotated: true,
+          ));
+          tag.free();
+        } catch (_) {
+          // Lightweight tag
+          try {
+            final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
+            tags.add(TagEntity(
+              name: tagName,
+              sha: ref.target.sha,
+              message: null,
+              isAnnotated: false,
+            ));
+            ref.free();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    r.free();
     return tags;
   }
 
@@ -1273,23 +1162,67 @@ class RealGitService implements GitService {
     String? target,
     String? message,
   }) async {
-    final args = ['tag'];
+    final r = Repository.open(repo.path);
+    final targetOid = target != null 
+        ? Oid.fromSHA(r, target) 
+        : r.head.target;
+        
     if (message != null) {
-      args.addAll(['-a', name, '-m', message]);
+      final signature = Signature.create(
+        name: 'Furcate User',
+        email: 'user@furcate.app',
+        time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      Tag.createAnnotated(
+        repo: r,
+        tagName: name,
+        target: targetOid,
+        targetType: GitObject.commit,
+        tagger: signature,
+        message: message,
+        force: true,
+      );
     } else {
-      args.add(name);
+      Tag.createLightweight(
+        repo: r,
+        tagName: name,
+        target: targetOid,
+        targetType: GitObject.commit,
+        force: true,
+      );
     }
-    if (target != null) args.add(target);
-    await _run(args, workingDirectory: repo.path);
-
-    // Read back.
-    final tags = await getTags(repo);
-    return tags.firstWhere((t) => t.name == name);
+    
+    final ref = Reference.lookup(repo: r, name: 'refs/tags/$name');
+    final tagOid = ref.target;
+    ref.free();
+    
+    try {
+      final tag = Tag.lookup(repo: r, oid: tagOid);
+      final entity = TagEntity(
+        name: tag.name,
+        sha: tag.targetOid.sha,
+        message: tag.message,
+        isAnnotated: true,
+      );
+      tag.free();
+      r.free();
+      return entity;
+    } catch (_) {
+      r.free();
+      return TagEntity(
+        name: name,
+        sha: tagOid.sha,
+        message: null,
+        isAnnotated: false,
+      );
+    }
   }
 
   @override
   Future<void> deleteTag(GitRepo repo, String name) async {
-    await _run(['tag', '-d', name], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Tag.delete(repo: r, tagName: name);
+    r.free();
   }
 
   // ---------------------------------------------------------------------------
@@ -1298,38 +1231,20 @@ class RealGitService implements GitService {
 
   @override
   Future<List<StashEntity>> getStashes(GitRepo repo) async {
-    if (Platform.isAndroid) return [];
-
-    final result = await _run(
-      ['stash', 'list', '--format=%H%x00%gd%x00%gs%x00%aI'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    final raw = _stdout(result).trim();
-    if (raw.isEmpty) return [];
-
-    final lines = raw.split('\n');
+    final r = Repository.open(repo.path);
     final stashes = <StashEntity>[];
-    for (final line in lines) {
-      if (line.trim().isEmpty) continue;
-      final parts = line.split('\x00');
-      if (parts.length < 4) continue;
-      final sha = parts[0].trim();
-      final ref = parts[1].trim(); // e.g. "stash@{0}"
-      final message = parts[2].trim();
-      final dateStr = parts[3].trim();
-
-      // Extract index from stash@{N}
-      final indexMatch = RegExp(r'stash@\{(\d+)\}').firstMatch(ref);
-      final index = indexMatch != null ? int.parse(indexMatch.group(1)!) : stashes.length;
-
-      stashes.add(StashEntity(
-        index: index,
-        message: message,
-        sha: sha,
-        dateTime: DateTime.tryParse(dateStr) ?? DateTime.now(),
-      ));
-    }
+    try {
+      final list = Stash.list(r);
+      for (final s in list) {
+        stashes.add(StashEntity(
+          index: s.index,
+          message: s.message,
+          sha: s.oid.sha,
+          dateTime: DateTime.now(),
+        ));
+      }
+    } catch (_) {}
+    r.free();
     return stashes;
   }
 
@@ -1339,28 +1254,51 @@ class RealGitService implements GitService {
     String? message,
     bool includeUntracked = false,
   }) async {
-    final args = ['stash', 'push'];
-    if (message != null) args.addAll(['-m', message]);
-    if (includeUntracked) args.add('--include-untracked');
-    await _run(args, workingDirectory: repo.path);
-
-    final stashes = await getStashes(repo);
-    return stashes.first;
+    final r = Repository.open(repo.path);
+    final signature = Signature.create(
+      name: 'Furcate User',
+      email: 'user@furcate.app',
+      time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+    final flags = {
+      GitStash.defaults,
+      if (includeUntracked) GitStash.includeUntracked,
+    };
+    final oid = Stash.create(
+      repo: r,
+      stasher: signature,
+      message: message,
+      flags: flags,
+    );
+    final entity = StashEntity(
+      index: 0,
+      message: message ?? 'Stash',
+      sha: oid.sha,
+      dateTime: DateTime.now(),
+    );
+    r.free();
+    return entity;
   }
 
   @override
   Future<void> applyStash(GitRepo repo, int index) async {
-    await _run(['stash', 'apply', 'stash@{$index}'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Stash.apply(repo: r, index: index);
+    r.free();
   }
 
   @override
   Future<void> dropStash(GitRepo repo, int index) async {
-    await _run(['stash', 'drop', 'stash@{$index}'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Stash.drop(repo: r, index: index);
+    r.free();
   }
 
   @override
   Future<void> popStash(GitRepo repo, int index) async {
-    await _run(['stash', 'pop', 'stash@{$index}'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    Stash.pop(repo: r, index: index);
+    r.free();
   }
 
   // ---------------------------------------------------------------------------
@@ -1409,80 +1347,78 @@ class RealGitService implements GitService {
 
   @override
   Future<List<SubmoduleEntity>> getSubmodules(GitRepo repo) async {
-    if (Platform.isAndroid) return [];
-
-    final statusResult = await _run(
-      ['submodule', 'status'],
-      workingDirectory: repo.path,
-      allowFailure: true,
-    );
-    if (statusResult.exitCode != 0) return [];
-    
-    final pathsMap = await _getSubmodulePaths(repo.path);
-    final urlsMap = await _getSubmoduleUrls(repo.path);
-    
-    // Create reverse map: path -> name
-    final pathToName = <String, String>{};
-    pathsMap.forEach((name, path) {
-      pathToName[path.replaceAll('\\', '/')] = name;
-    });
-    
-    final lines = LineSplitter.split(statusResult.stdout as String);
+    final r = Repository.open(repo.path);
     final submodules = <SubmoduleEntity>[];
-    
-    for (final line in lines) {
-      if (line.length < 42) continue;
-      final statusChar = line.substring(0, 1);
-      final sha = line.substring(1, 41);
-      var pathAndMore = line.substring(42).trim();
-      var path = pathAndMore;
-      if (pathAndMore.contains(' (')) {
-        final index = pathAndMore.lastIndexOf(' (');
-        path = pathAndMore.substring(0, index);
+    try {
+      final paths = Submodule.list(r);
+      for (final p in paths) {
+        try {
+          final sub = Submodule.lookup(repo: r, name: p);
+          final headSha = sub.headOid?.sha ?? sub.indexOid?.sha ?? '';
+          
+          final statusSet = sub.status();
+          SubmoduleStatus status = SubmoduleStatus.clean;
+          if (statusSet.contains(GitSubmoduleStatus.workdirUninitialized)) {
+            status = SubmoduleStatus.uninitialized;
+          } else if (statusSet.contains(GitSubmoduleStatus.workdirModified) || 
+                     statusSet.contains(GitSubmoduleStatus.indexModified) || 
+                     statusSet.contains(GitSubmoduleStatus.smWorkdirModified) ||
+                     statusSet.contains(GitSubmoduleStatus.workdirIndexModified)) {
+            status = SubmoduleStatus.modified;
+          }
+          
+          final isInitialized = !statusSet.contains(GitSubmoduleStatus.workdirUninitialized);
+
+          submodules.add(SubmoduleEntity(
+            name: sub.name,
+            path: sub.path,
+            url: sub.url,
+            sha: headSha,
+            status: status,
+            isInitialized: isInitialized,
+          ));
+        } catch (_) {}
       }
-      
-      final normalizedPath = path.replaceAll('\\', '/');
-      final name = pathToName[normalizedPath] ?? path.split('/').last;
-      final url = urlsMap[name] ?? '';
-      
-      SubmoduleStatus status;
-      bool isInitialized = true;
-      if (statusChar == '-') {
-        status = SubmoduleStatus.uninitialized;
-        isInitialized = false;
-      } else if (statusChar == '+') {
-        status = SubmoduleStatus.modified;
-      } else if (statusChar == ' ') {
-        status = SubmoduleStatus.clean;
-      } else {
-        status = SubmoduleStatus.clean;
-      }
-      
-      submodules.add(SubmoduleEntity(
-        name: name,
-        path: path,
-        url: url,
-        sha: sha,
-        status: status,
-        isInitialized: isInitialized,
-      ));
-    }
+    } catch (_) {}
+    r.free();
     return submodules;
   }
 
   @override
   Future<void> initSubmodules(GitRepo repo) async {
-    await _run(['submodule', 'init'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final paths = Submodule.list(r);
+    for (final p in paths) {
+      try {
+        Submodule.init(repo: r, name: p);
+      } catch (_) {}
+    }
+    r.free();
   }
 
   @override
   Future<void> updateSubmodules(GitRepo repo) async {
-    await _run(['submodule', 'update', '--init', '--recursive'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final paths = Submodule.list(r);
+    for (final p in paths) {
+      try {
+        Submodule.update(repo: r, name: p, init: true);
+      } catch (_) {}
+    }
+    r.free();
   }
 
   @override
   Future<void> syncSubmodules(GitRepo repo) async {
-    await _run(['submodule', 'sync'], workingDirectory: repo.path);
+    final r = Repository.open(repo.path);
+    final paths = Submodule.list(r);
+    for (final p in paths) {
+      try {
+        final sub = Submodule.lookup(repo: r, name: p);
+        sub.sync();
+      } catch (_) {}
+    }
+    r.free();
   }
 }
 
