@@ -1449,15 +1449,20 @@ class RealGitService implements GitService {
   Future<List<String>> getTreeFiles(GitRepo repo, {String? ref}) async {
     final r = Repository.open(repo.path);
     final list = <String>[];
+    Commit? commit;
+    Tree? tree;
+    final subTrees = <Tree>[];
     try {
       Oid commitOid;
       if (ref != null) {
         commitOid = Oid.fromSHA(r, ref);
       } else {
-        commitOid = r.head.target;
+        final headRef = r.head;
+        commitOid = headRef.target;
+        headRef.free();
       }
-      final commit = Commit.lookup(repo: r, oid: commitOid);
-      final tree = commit.tree;
+      commit = Commit.lookup(repo: r, oid: commitOid);
+      tree = commit.tree;
       
       void traverse(Tree t, String currentPath) {
         for (var i = 0; i < t.length; i++) {
@@ -1465,8 +1470,8 @@ class RealGitService implements GitService {
           final entryPath = currentPath.isEmpty ? entry.name : '$currentPath/${entry.name}';
           if (entry.type == GitObject.tree) {
             final subTree = entry.toObject(r) as Tree;
+            subTrees.add(subTree);
             traverse(subTree, entryPath);
-            subTree.free();
           } else if (entry.type == GitObject.blob) {
             list.add(entryPath);
           }
@@ -1474,43 +1479,86 @@ class RealGitService implements GitService {
       }
       
       traverse(tree, '');
-      tree.free();
-      commit.free();
-    } catch (_) {}
-    r.free();
+    } catch (_) {} finally {
+      for (final st in subTrees) {
+        try {
+          st.free();
+        } catch (_) {}
+      }
+      tree?.free();
+      commit?.free();
+      r.free();
+    }
     return list;
   }
 
   @override
   Future<String> getFileContentAtRef(GitRepo repo, String path, {String? ref}) async {
     final r = Repository.open(repo.path);
+    Commit? commit;
+    Tree? tree;
+    Blob? blob;
+    final openTrees = <Tree>[];
     try {
       Oid commitOid;
       if (ref != null) {
         commitOid = Oid.fromSHA(r, ref);
       } else {
-        commitOid = r.head.target;
+        final headRef = r.head;
+        commitOid = headRef.target;
+        headRef.free();
       }
-      final commit = Commit.lookup(repo: r, oid: commitOid);
-      final tree = commit.tree;
+      commit = Commit.lookup(repo: r, oid: commitOid);
+      tree = commit.tree;
       
-      final entry = tree[path];
-      if (entry.type == GitObject.blob) {
-        final blob = entry.toObject(r) as Blob;
-        final content = blob.content;
-        blob.free();
-        entry.free();
-        tree.free();
-        commit.free();
-        r.free();
-        return content;
+      final entry = _findEntryByPath(r, tree, path, openTrees);
+      if (entry != null && entry.type == GitObject.blob) {
+        blob = entry.toObject(r) as Blob;
+        return blob.content;
       }
-      entry.free();
-      tree.free();
-      commit.free();
-    } catch (_) {}
-    r.free();
+    } catch (_) {} finally {
+      blob?.free();
+      for (final t in openTrees) {
+        try {
+          t.free();
+        } catch (_) {}
+      }
+      tree?.free();
+      commit?.free();
+      r.free();
+    }
     return '';
+  }
+
+  TreeEntry? _findEntryByPath(Repository repo, Tree rootTree, String path, List<Tree> openTrees) {
+    final parts = path.split('/');
+    Tree currentTree = rootTree;
+    
+    for (var i = 0; i < parts.length; i++) {
+      final part = parts[i];
+      TreeEntry? found;
+      for (var j = 0; j < currentTree.length; j++) {
+        final e = currentTree[j];
+        if (e.name == part) {
+          found = e;
+          break;
+        }
+      }
+      if (found == null) return null;
+      
+      if (i == parts.length - 1) {
+        return found;
+      } else {
+        if (found.type == GitObject.tree) {
+          final subTree = found.toObject(repo) as Tree;
+          openTrees.add(subTree);
+          currentTree = subTree;
+        } else {
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   @override
@@ -1521,11 +1569,19 @@ class RealGitService implements GitService {
     String commitMessage,
   ) async {
     final r = Repository.open(repo.path);
+    Commit? headCommit;
+    Tree? rootTree;
+    Tree? newTree;
+    final openTrees = <Tree>[];
     try {
       final newBlobOid = Blob.create(repo: r, content: content);
       
-      final headCommit = Commit.lookup(repo: r, oid: r.head.target);
-      final rootTree = headCommit.tree;
+      if (!r.isEmpty) {
+        final headRef = r.head;
+        headCommit = Commit.lookup(repo: r, oid: headRef.target);
+        headRef.free();
+        rootTree = headCommit.tree;
+      }
       
       final pathParts = path.split('/');
       final newTreeOid = _updateTreeRecursively(
@@ -1533,32 +1589,42 @@ class RealGitService implements GitService {
         currentTree: rootTree,
         pathParts: pathParts,
         newBlobOid: newBlobOid,
+        openTrees: openTrees,
       );
       
-      final newTree = Tree.lookup(repo: r, oid: newTreeOid);
+      newTree = Tree.lookup(repo: r, oid: newTreeOid);
       
-      final signature = Signature.create(
-        name: 'Furcate User',
-        email: 'user@furcate.app',
-        time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      );
-      
-      Commit.create(
-        repo: r,
-        updateRef: 'HEAD',
-        message: commitMessage,
-        author: signature,
-        committer: signature,
-        tree: newTree,
-        parents: [headCommit],
-      );
-      
-      newTree.free();
-      headCommit.free();
-      rootTree.free();
+      Signature? signature;
+      try {
+        signature = Signature.create(
+          name: 'Furcate User',
+          email: 'user@furcate.app',
+          time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+        
+        Commit.create(
+          repo: r,
+          updateRef: 'HEAD',
+          message: commitMessage,
+          author: signature,
+          committer: signature,
+          tree: newTree,
+          parents: headCommit != null ? [headCommit] : [],
+        );
+      } finally {
+        signature?.free();
+      }
     } catch (_) {
       rethrow;
     } finally {
+      newTree?.free();
+      for (final t in openTrees) {
+        try {
+          t.free();
+        } catch (_) {}
+      }
+      headCommit?.free();
+      rootTree?.free();
       r.free();
     }
   }
@@ -1568,6 +1634,7 @@ class RealGitService implements GitService {
     required Tree? currentTree,
     required List<String> pathParts,
     required Oid newBlobOid,
+    required List<Tree> openTrees,
   }) {
     final builder = TreeBuilder(repo: repo, tree: currentTree);
     final currentPart = pathParts.first;
@@ -1584,9 +1651,17 @@ class RealGitService implements GitService {
     } else {
       Tree? subTree;
       try {
-        final entry = currentTree?[currentPart];
-        if (entry != null && entry.type == GitObject.tree) {
-          subTree = entry.toObject(repo) as Tree;
+        if (currentTree != null) {
+          for (var i = 0; i < currentTree.length; i++) {
+            final e = currentTree[i];
+            if (e.name == currentPart) {
+              if (e.type == GitObject.tree) {
+                subTree = e.toObject(repo) as Tree;
+                openTrees.add(subTree);
+              }
+              break;
+            }
+          }
         }
       } catch (_) {}
       
@@ -1595,11 +1670,8 @@ class RealGitService implements GitService {
         currentTree: subTree,
         pathParts: pathParts.sublist(1),
         newBlobOid: newBlobOid,
+        openTrees: openTrees,
       );
-      
-      if (subTree != null) {
-        subTree.free();
-      }
       
       builder.add(
         filename: currentPart,
