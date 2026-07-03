@@ -14,6 +14,7 @@ import '../staging/staging_bloc.dart';
 import '../staging/staging_panel.dart';
 import 'repository_bloc.dart';
 import 'toolbar.dart';
+import 'file_browser_panel.dart';
 
 
 class MainWorkspace extends StatefulWidget {
@@ -107,6 +108,8 @@ class _MainWorkspaceState extends State<MainWorkspace> {
                         builder: (context, sidebarState) {
                           if (sidebarState.selectedItem.type == SidebarItemType.changes) {
                             return StagingPanel(repo: widget.repo);
+                          } else if (sidebarState.selectedItem.type == SidebarItemType.files) {
+                            return FileBrowserPanel(repo: widget.repo);
                           } else {
                             return _buildHistoryAndCommitDetailView(context, widget.repo);
                           }

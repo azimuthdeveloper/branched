@@ -3,7 +3,7 @@ import 'package:equatable/equatable.dart';
 import '../../git_engine/git_models.dart';
 import '../../git_engine/git_service.dart';
 
-enum SidebarItemType { changes, branch, remoteBranch, tag, stash }
+enum SidebarItemType { changes, files, branch, remoteBranch, tag, stash }
 
 class SidebarItem extends Equatable {
   final String label;

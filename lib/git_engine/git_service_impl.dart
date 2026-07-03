@@ -130,11 +130,27 @@ class RealGitService implements GitService {
     void Function(double)? onProgress,
   }) async {
     if (Platform.isAndroid) {
-      throw GitException(
-        'git clone',
-        127,
-        'Native Git CLI operations (such as cloning) are not supported on Android.',
+      onProgress?.call(0.0);
+      final r = Repository.clone(
+        url: url,
+        localPath: path,
+        bare: true,
+        callbacks: Callbacks(
+          transferProgress: (progress) {
+            final total = progress.totalObjects;
+            final indexed = progress.indexedObjects;
+            if (total > 0) {
+              onProgress?.call(indexed / total);
+            }
+          },
+          credentials: (username != null && password != null)
+              ? UserPass(username: username, password: password)
+              : null,
+        ),
       );
+      final name = p.basename(path);
+      r.free();
+      return GitRepo(path: path, name: name);
     }
     onProgress?.call(0.0);
     String effectiveUrl = url;
@@ -1419,6 +1435,181 @@ class RealGitService implements GitService {
       } catch (_) {}
     }
     r.free();
+  }
+
+  @override
+  Future<bool> isBareRepository(GitRepo repo) async {
+    final r = Repository.open(repo.path);
+    final isBare = r.isBare;
+    r.free();
+    return isBare;
+  }
+
+  @override
+  Future<List<String>> getTreeFiles(GitRepo repo, {String? ref}) async {
+    final r = Repository.open(repo.path);
+    final list = <String>[];
+    try {
+      Oid commitOid;
+      if (ref != null) {
+        commitOid = Oid.fromSHA(r, ref);
+      } else {
+        commitOid = r.head.target;
+      }
+      final commit = Commit.lookup(repo: r, oid: commitOid);
+      final tree = commit.tree;
+      
+      void traverse(Tree t, String currentPath) {
+        for (var i = 0; i < t.length; i++) {
+          final entry = t[i];
+          final entryPath = currentPath.isEmpty ? entry.name : '$currentPath/${entry.name}';
+          if (entry.type == GitObject.tree) {
+            final subTree = entry.toObject(r) as Tree;
+            traverse(subTree, entryPath);
+            subTree.free();
+          } else if (entry.type == GitObject.blob) {
+            list.add(entryPath);
+          }
+        }
+      }
+      
+      traverse(tree, '');
+      tree.free();
+      commit.free();
+    } catch (_) {}
+    r.free();
+    return list;
+  }
+
+  @override
+  Future<String> getFileContentAtRef(GitRepo repo, String path, {String? ref}) async {
+    final r = Repository.open(repo.path);
+    try {
+      Oid commitOid;
+      if (ref != null) {
+        commitOid = Oid.fromSHA(r, ref);
+      } else {
+        commitOid = r.head.target;
+      }
+      final commit = Commit.lookup(repo: r, oid: commitOid);
+      final tree = commit.tree;
+      
+      final entry = tree[path];
+      if (entry.type == GitObject.blob) {
+        final blob = entry.toObject(r) as Blob;
+        final content = blob.content;
+        blob.free();
+        entry.free();
+        tree.free();
+        commit.free();
+        r.free();
+        return content;
+      }
+      entry.free();
+      tree.free();
+      commit.free();
+    } catch (_) {}
+    r.free();
+    return '';
+  }
+
+  @override
+  Future<void> writeAndCommitFile(
+    GitRepo repo,
+    String path,
+    String content,
+    String commitMessage,
+  ) async {
+    final r = Repository.open(repo.path);
+    try {
+      final newBlobOid = Blob.create(repo: r, content: content);
+      
+      final headCommit = Commit.lookup(repo: r, oid: r.head.target);
+      final rootTree = headCommit.tree;
+      
+      final pathParts = path.split('/');
+      final newTreeOid = _updateTreeRecursively(
+        repo: r,
+        currentTree: rootTree,
+        pathParts: pathParts,
+        newBlobOid: newBlobOid,
+      );
+      
+      final newTree = Tree.lookup(repo: r, oid: newTreeOid);
+      
+      final signature = Signature.create(
+        name: 'Furcate User',
+        email: 'user@furcate.app',
+        time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      
+      Commit.create(
+        repo: r,
+        updateRef: 'HEAD',
+        message: commitMessage,
+        author: signature,
+        committer: signature,
+        tree: newTree,
+        parents: [headCommit],
+      );
+      
+      newTree.free();
+      headCommit.free();
+      rootTree.free();
+    } catch (_) {
+      rethrow;
+    } finally {
+      r.free();
+    }
+  }
+
+  Oid _updateTreeRecursively({
+    required Repository repo,
+    required Tree? currentTree,
+    required List<String> pathParts,
+    required Oid newBlobOid,
+  }) {
+    final builder = TreeBuilder(repo: repo, tree: currentTree);
+    final currentPart = pathParts.first;
+    
+    if (pathParts.length == 1) {
+      builder.add(
+        filename: currentPart,
+        oid: newBlobOid,
+        filemode: GitFilemode.blob,
+      );
+      final newTreeOid = builder.write();
+      builder.free();
+      return newTreeOid;
+    } else {
+      Tree? subTree;
+      try {
+        final entry = currentTree?[currentPart];
+        if (entry != null && entry.type == GitObject.tree) {
+          subTree = entry.toObject(repo) as Tree;
+        }
+      } catch (_) {}
+      
+      final newSubTreeOid = _updateTreeRecursively(
+        repo: repo,
+        currentTree: subTree,
+        pathParts: pathParts.sublist(1),
+        newBlobOid: newBlobOid,
+      );
+      
+      if (subTree != null) {
+        subTree.free();
+      }
+      
+      builder.add(
+        filename: currentPart,
+        oid: newSubTreeOid,
+        filemode: GitFilemode.tree,
+      );
+      final newTreeOid = builder.write();
+      builder.free();
+      return newTreeOid;
+    }
   }
 }
 

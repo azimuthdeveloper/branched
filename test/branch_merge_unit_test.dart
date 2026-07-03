@@ -316,4 +316,16 @@ class TestMockGitService implements GitService {
 
   @override
   Future<void> syncSubmodules(GitRepo repo) async {}
+
+  @override
+  Future<bool> isBareRepository(GitRepo repo) async => false;
+
+  @override
+  Future<List<String>> getTreeFiles(GitRepo repo, {String? ref}) async => [];
+
+  @override
+  Future<String> getFileContentAtRef(GitRepo repo, String path, {String? ref}) async => '';
+
+  @override
+  Future<void> writeAndCommitFile(GitRepo repo, String path, String content, String commitMessage) async {}
 }

@@ -679,6 +679,9 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                     // Changes section
                     _buildChangesRow(state),
 
+                    // Files section
+                    _buildFilesRow(state),
+
                     const Divider(color: FurcateTheme.darkBorder, height: 1),
 
                     // Branches section
@@ -744,6 +747,34 @@ class _SidebarWidgetState extends State<SidebarWidget> {
             SizedBox(width: 8),
             Text(
               'Changes',
+              style: TextStyle(fontSize: 12, color: FurcateTheme.darkTextEmphasis),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilesRow(SidebarState state) {
+    final isSelected = state.selectedItem.type == SidebarItemType.files;
+    return GestureDetector(
+      onTap: () {
+        context.read<SidebarBloc>().add(
+              const SelectSidebarItemEvent(
+                SidebarItem(label: 'Files', type: SidebarItemType.files),
+              ),
+            );
+      },
+      child: Container(
+        height: 28,
+        color: isSelected ? FurcateTheme.darkSelection : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: const Row(
+          children: [
+            Icon(Icons.folder_open, size: 16, color: FurcateTheme.darkTextPrimary),
+            SizedBox(width: 8),
+            Text(
+              'Files',
               style: TextStyle(fontSize: 12, color: FurcateTheme.darkTextEmphasis),
             ),
           ],

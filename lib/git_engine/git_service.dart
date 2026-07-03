@@ -79,4 +79,10 @@ abstract class GitService {
   Future<void> initSubmodules(GitRepo repo);
   Future<void> updateSubmodules(GitRepo repo);
   Future<void> syncSubmodules(GitRepo repo);
+
+  // Bare & Remote file browsing/editing operations
+  Future<bool> isBareRepository(GitRepo repo);
+  Future<List<String>> getTreeFiles(GitRepo repo, {String? ref});
+  Future<String> getFileContentAtRef(GitRepo repo, String path, {String? ref});
+  Future<void> writeAndCommitFile(GitRepo repo, String path, String content, String commitMessage);
 }
