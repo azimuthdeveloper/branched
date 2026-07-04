@@ -5,7 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
-import 'package:git2dart_binaries/git2dart_binaries.dart';
+import 'package:git2dart_binaries/git2dart_binaries.dart' hide Libgit2;
 import 'package:git2dart/git2dart.dart';
 import 'git_models.dart';
 import 'git_service.dart';
@@ -25,6 +25,14 @@ class GitException implements Exception {
 /// A [GitService] implementation that delegates to the system `git` binary
 /// via [Process.run].
 class RealGitService implements GitService {
+  RealGitService() {
+    try {
+      Libgit2.ownerValidation = false;
+    } catch (e) {
+      // Ignore or log.
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------

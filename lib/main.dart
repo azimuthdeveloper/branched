@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:git2dart/git2dart.dart';
 import 'core/locator.dart';
 import 'core/theme.dart';
 import 'git_engine/git_service.dart';
@@ -12,6 +13,13 @@ import 'features/window_chrome/window_chrome.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Disable owner validation for git repositories to prevent dubious ownership errors (especially on Android).
+  try {
+    Libgit2.ownerValidation = false;
+  } catch (e) {
+    debugPrint('Failed to set Libgit2 owner validation: $e');
+  }
 
   if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
     await windowManager.ensureInitialized();
