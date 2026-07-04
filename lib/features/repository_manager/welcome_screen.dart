@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import '../../core/theme.dart';
 import '../../core/locator.dart';
 import '../../core/file_picker_service.dart';
@@ -229,9 +232,41 @@ class WelcomeScreen extends StatelessWidget {
     context.read<RepositoryManagerBloc>().add(OpenRepositoryEvent(selectedDir));
   }
 
+  String _getRepoNameFromUrl(String url) {
+    if (url.isEmpty) return '';
+    var cleaned = url.trim();
+    if (cleaned.endsWith('.git')) {
+      cleaned = cleaned.substring(0, cleaned.length - 4);
+    }
+    if (cleaned.endsWith('/')) {
+      cleaned = cleaned.substring(0, cleaned.length - 1);
+    }
+    final index = cleaned.lastIndexOf('/');
+    if (index != -1) {
+      return cleaned.substring(index + 1);
+    }
+    return cleaned;
+  }
+
   void _showCloneRepoDialog(BuildContext context) {
     final urlController = TextEditingController();
     final pathController = TextEditingController();
+    String baseDir = '';
+
+    if (Platform.isAndroid) {
+      getApplicationDocumentsDirectory().then((dir) {
+        baseDir = dir.path;
+        pathController.text = p.join(baseDir, '');
+      });
+    }
+
+    urlController.addListener(() {
+      final url = urlController.text.trim();
+      final repoName = _getRepoNameFromUrl(url);
+      if (Platform.isAndroid && baseDir.isNotEmpty) {
+        pathController.text = p.join(baseDir, repoName);
+      }
+    });
 
     showDialog(
       context: context,
@@ -241,6 +276,7 @@ class WelcomeScreen extends StatelessWidget {
           title: const Text('Clone Repository', style: TextStyle(fontSize: 16)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               TextField(
                 controller: urlController,
@@ -263,20 +299,44 @@ class WelcomeScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.folder_open, color: FurcateTheme.darkAccent),
-                    tooltip: 'Browse...',
-                    onPressed: () async {
-                      final dir = await locator<FilePickerService>().getDirectoryPath(
-                        dialogTitle: 'Select Clone Destination',
-                      );
-                      if (dir != null) {
-                        pathController.text = dir;
-                      }
-                    },
-                  ),
+                  if (!Platform.isAndroid)
+                    IconButton(
+                      icon: const Icon(Icons.folder_open, color: FurcateTheme.darkAccent),
+                      tooltip: 'Browse...',
+                      onPressed: () async {
+                        final dir = await locator<FilePickerService>().getDirectoryPath(
+                          dialogTitle: 'Select Clone Destination',
+                        );
+                        if (dir != null) {
+                          pathController.text = dir;
+                        }
+                      },
+                    )
+                  else
+                    IconButton(
+                      icon: const Icon(Icons.refresh, color: FurcateTheme.darkAccent),
+                      tooltip: 'Reset to default documents path',
+                      onPressed: () {
+                        if (baseDir.isNotEmpty) {
+                          final url = urlController.text.trim();
+                          final repoName = _getRepoNameFromUrl(url);
+                          pathController.text = p.join(baseDir, repoName);
+                        }
+                      },
+                    ),
                 ],
               ),
+              if (Platform.isAndroid) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Note: On Android, repositories must be stored in the app\'s internal documents folder to support Git filesystem operations without OS permission restrictions.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.4,
+                    color: FurcateTheme.darkTextSecondary,
+                  ),
+                ),
+              ],
             ],
           ),
           actions: [
