@@ -106,6 +106,39 @@ class RealGitService implements GitService {
 
   String _stdout(ProcessResult r) => (r.stdout as String);
 
+  String _safeRefSha(Pointer<git_reference> refPtr) {
+    if (refPtr == nullptr) return '';
+    try {
+      final type = libgit2.git_reference_type(refPtr);
+      
+      if (type == git_reference_t.GIT_REFERENCE_DIRECT) {
+        final oidPtr = libgit2.git_reference_target(refPtr);
+        if (oidPtr != nullptr) {
+          return Oid(oidPtr).sha;
+        }
+      } else if (type == git_reference_t.GIT_REFERENCE_SYMBOLIC) {
+        Pointer<git_reference> resolved = nullptr;
+        using((arena) {
+          final resolvedOut = arena<Pointer<git_reference>>();
+          final error = libgit2.git_reference_resolve(resolvedOut, refPtr);
+          if (error == 0) {
+            resolved = resolvedOut.value;
+          }
+        });
+        if (resolved != nullptr) {
+          final oidPtr = libgit2.git_reference_target(resolved);
+          String sha = '';
+          if (oidPtr != nullptr) {
+            sha = Oid(oidPtr).sha;
+          }
+          libgit2.git_reference_free(resolved);
+          return sha;
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
   // ---------------------------------------------------------------------------
   // Repository Operations
   // ---------------------------------------------------------------------------
@@ -201,7 +234,7 @@ class RealGitService implements GitService {
         list.add(BranchEntity(
           name: b.name,
           shortName: b.name,
-          tipSha: b.target.sha,
+          tipSha: _safeRefSha(b.pointer),
           isHead: b.isHead,
           isRemote: false,
         ));
@@ -221,7 +254,7 @@ class RealGitService implements GitService {
         list.add(BranchEntity(
           name: b.name,
           shortName: b.name,
-          tipSha: b.target.sha,
+          tipSha: _safeRefSha(b.pointer),
           isHead: b.isHead,
           isRemote: true,
         ));
@@ -297,7 +330,7 @@ class RealGitService implements GitService {
       final entity = BranchEntity(
         name: head.name,
         shortName: head.shorthand,
-        tipSha: head.target.sha,
+        tipSha: _safeRefSha(head.pointer),
         isHead: true,
         isRemote: false,
       );
@@ -358,7 +391,7 @@ class RealGitService implements GitService {
     final refsMap = <String, List<RefEntity>>{};
     try {
       for (final b in r.branchesLocal) {
-        final sha = b.target.sha;
+        final sha = _safeRefSha(b.pointer);
         refsMap.putIfAbsent(sha, () => []).add(RefEntity(
           name: b.name,
           type: 'local',
@@ -366,7 +399,7 @@ class RealGitService implements GitService {
         b.free();
       }
       for (final b in r.branchesRemote) {
-        final sha = b.target.sha;
+        final sha = _safeRefSha(b.pointer);
         final parts = b.name.split('/');
         final remoteName = parts.isNotEmpty ? parts.first : null;
         refsMap.putIfAbsent(sha, () => []).add(RefEntity(
@@ -379,7 +412,7 @@ class RealGitService implements GitService {
       for (final tagName in r.tags) {
         try {
           final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
-          final sha = ref.target.sha;
+          final sha = _safeRefSha(ref.pointer);
           ref.free();
           refsMap.putIfAbsent(sha, () => []).add(RefEntity(
             name: tagName,
