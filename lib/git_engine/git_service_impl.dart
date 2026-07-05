@@ -1413,7 +1413,16 @@ class RealGitService implements GitService {
       for (final p in paths) {
         try {
           final sub = Submodule.lookup(repo: r, name: p);
-          final headSha = sub.headOid?.sha ?? sub.indexOid?.sha ?? '';
+          String headSha = '';
+          final hOid = sub.headOid;
+          if (hOid != null && hOid.pointer != nullptr) {
+            headSha = hOid.sha;
+          } else {
+            final iOid = sub.indexOid;
+            if (iOid != null && iOid.pointer != nullptr) {
+              headSha = iOid.sha;
+            }
+          }
           
           final statusSet = sub.status();
           SubmoduleStatus status = SubmoduleStatus.clean;
