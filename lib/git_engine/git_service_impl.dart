@@ -508,16 +508,18 @@ class RealGitService implements GitService {
         final count = libgit2.git_status_list_entrycount(out.value);
         for (var i = 0; i < count; i++) {
           final entry = libgit2.git_status_byindex(out.value, i);
+          if (entry == nullptr) continue;
           
           var delta = entry.ref.index_to_workdir;
           if (entry.ref.head_to_index != nullptr) {
             delta = entry.ref.head_to_index;
           }
+          if (delta == nullptr) continue;
           
           final isRenamed = (delta.ref.flags & 4) != 0;
-          final filePath = isRenamed
-              ? delta.ref.new_file.path.cast<Utf8>().toDartString()
-              : delta.ref.old_file.path.cast<Utf8>().toDartString();
+          final pathPtr = isRenamed ? delta.ref.new_file.path : delta.ref.old_file.path;
+          if (pathPtr == nullptr) continue;
+          final filePath = pathPtr.cast<Utf8>().toDartString();
               
           final statusAsInt = entry.ref.statusAsInt;
           final statusFlags = GitStatus.values
