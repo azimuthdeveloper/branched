@@ -186,8 +186,23 @@ class _FileEditorPane extends StatelessWidget {
           );
         }
 
-        if (state.isLoading && state.selectedFileContent == null) {
+        if (state.isLoading && state.selectedFileContent == null && state.error == null) {
           return const Center(child: CircularProgressIndicator());
+        }
+
+        // Failed to load (binary, too large, missing) — never offer an empty editor.
+        if (state.error != null && state.selectedFileContent == null) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                key: const Key('file_browser_file_error'),
+                state.error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: FurcateTheme.diffDelText, fontSize: 12),
+              ),
+            ),
+          );
         }
 
         // Set content if loaded and editor is empty or file changed
@@ -229,7 +244,7 @@ class _FileEditorPane extends StatelessWidget {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    onPressed: state.isSaving
+                    onPressed: state.isSaving || state.selectedFileContent == null
                         ? null
                         : () => _showCommitDialog(context, state.selectedFilePath!),
                     icon: state.isSaving

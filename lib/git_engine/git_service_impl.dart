@@ -139,6 +139,30 @@ class RealGitService implements GitService {
     return '';
   }
 
+  /// Runs [action] with the repository HEAD oid, keeping the underlying
+  /// reference alive for the duration.
+  ///
+  /// git2dart [Oid]s returned by [Reference.target] point into the reference's
+  /// native memory — freeing (or GC-finalizing) the ref dangles the Oid.
+  T _withHeadOid<T>(Repository r, T Function(Oid oid) action) {
+    final head = r.head;
+    try {
+      return action(head.target);
+    } finally {
+      head.free();
+    }
+  }
+
+  /// SHA of HEAD while the reference is still alive. Returns null when HEAD
+  /// is unborn or otherwise unreadable.
+  String? _headSha(Repository r) {
+    try {
+      return _withHeadOid(r, (oid) => oid.sha);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Repository Operations
   // ---------------------------------------------------------------------------
@@ -272,21 +296,27 @@ class RealGitService implements GitService {
     String? startPoint,
   }) async {
     final r = Repository.open(repo.path);
-    final target = startPoint != null 
-        ? Commit.lookup(repo: r, oid: Oid.fromSHA(r, startPoint)) 
-        : Commit.lookup(repo: r, oid: r.head.target);
-    final branch = Branch.create(repo: r, name: name, target: target);
-    final entity = BranchEntity(
-      name: branch.name,
-      shortName: branch.name,
-      tipSha: target.oid.sha,
-      isHead: false,
-      isRemote: false,
-    );
-    branch.free();
-    target.free();
-    r.free();
-    return entity;
+    final Commit target;
+    if (startPoint != null) {
+      target = Commit.lookup(repo: r, oid: Oid.fromSHA(r, startPoint));
+    } else {
+      target = _withHeadOid(r, (oid) => Commit.lookup(repo: r, oid: oid));
+    }
+    try {
+      final branch = Branch.create(repo: r, name: name, target: target);
+      final entity = BranchEntity(
+        name: branch.name,
+        shortName: branch.name,
+        tipSha: target.oid.sha,
+        isHead: false,
+        isRemote: false,
+      );
+      branch.free();
+      return entity;
+    } finally {
+      target.free();
+      r.free();
+    }
   }
 
   @override
@@ -310,33 +340,78 @@ class RealGitService implements GitService {
   @override
   Future<void> checkoutBranch(GitRepo repo, String name) async {
     final r = Repository.open(repo.path);
-    final fullRefName = name.startsWith('refs/') ? name : 'refs/heads/$name';
-    final ref = Reference.create(
-      repo: r,
-      name: 'HEAD',
-      target: fullRefName,
-      force: true,
-    );
-    ref.free();
-    Checkout.head(repo: r, strategy: {GitCheckout.force});
-    r.free();
+    try {
+      // Accept "main", "refs/heads/main", or remote-style names.
+      final fullRefName = name.startsWith('refs/')
+          ? name
+          : name.contains('/')
+              ? 'refs/remotes/$name'
+              : 'refs/heads/$name';
+
+      // Point HEAD at the branch (attached), then update the worktree.
+      r.setHead(fullRefName);
+      Checkout.reference(
+        repo: r,
+        name: fullRefName,
+        strategy: {GitCheckout.force, GitCheckout.recreateMissing},
+      );
+    } finally {
+      r.free();
+    }
   }
 
   @override
   Future<BranchEntity> getCurrentBranch(GitRepo repo) async {
     final r = Repository.open(repo.path);
     try {
+      // Unborn HEAD: branch name exists symbolically but has no commits yet.
+      if (r.isBranchUnborn) {
+        try {
+          final headFile = File(p.join(repo.path, '.git', 'HEAD'));
+          // Bare repos store HEAD at repo/HEAD rather than repo/.git/HEAD.
+          final headPath = headFile.existsSync()
+              ? headFile.path
+              : p.join(repo.path, 'HEAD');
+          final raw = File(headPath).readAsStringSync().trim();
+          // "ref: refs/heads/master"
+          final match = RegExp(r'^ref:\s*(.+)$').firstMatch(raw);
+          final refName = match?.group(1)?.trim() ?? 'refs/heads/main';
+          final short = refName.startsWith('refs/heads/')
+              ? refName.substring('refs/heads/'.length)
+              : refName;
+          r.free();
+          return BranchEntity(
+            name: refName,
+            shortName: short,
+            tipSha: '',
+            isHead: true,
+            isRemote: false,
+          );
+        } catch (_) {
+          r.free();
+          return const BranchEntity(
+            name: 'refs/heads/main',
+            shortName: 'main',
+            tipSha: '',
+            isHead: true,
+            isRemote: false,
+          );
+        }
+      }
+
       final head = r.head;
-      final entity = BranchEntity(
-        name: head.name,
-        shortName: head.shorthand,
-        tipSha: _safeRefSha(head.pointer),
-        isHead: true,
-        isRemote: false,
-      );
-      head.free();
-      r.free();
-      return entity;
+      try {
+        return BranchEntity(
+          name: head.name,
+          shortName: head.shorthand,
+          tipSha: _safeRefSha(head.pointer),
+          isHead: true,
+          isRemote: false,
+        );
+      } finally {
+        head.free();
+        r.free();
+      }
     } catch (_) {
       r.free();
       return const BranchEntity(
@@ -366,16 +441,52 @@ class RealGitService implements GitService {
 
     try {
       if (branch != null) {
-        final refName = branch.startsWith('refs/') ? branch : 'refs/heads/$branch';
-        final ref = Reference.lookup(repo: r, name: refName);
-        walker.push(ref.target);
-        ref.free();
+        // Accept a branch name, full ref, or raw commit SHA.
+        try {
+          final refName = branch.startsWith('refs/') ? branch : 'refs/heads/$branch';
+          final ref = Reference.lookup(repo: r, name: refName);
+          try {
+            walker.push(ref.target);
+          } finally {
+            ref.free();
+          }
+        } catch (_) {
+          // Treat as SHA / any rev that Oid.fromSHA can resolve.
+          walker.push(Oid.fromSHA(r, branch));
+        }
       } else {
-        walker.push(r.head.target);
+        // Fork-style whole-repo graph: walk HEAD plus every branch tip.
+        var pushed = false;
+        try {
+          _withHeadOid(r, (oid) {
+            walker.push(oid);
+            pushed = true;
+          });
+        } catch (_) {}
+        try {
+          for (final b in r.branchesLocal) {
+            try {
+              walker.push(b.target);
+            } catch (_) {}
+            b.free();
+          }
+          for (final b in r.branchesRemote) {
+            try {
+              walker.push(b.target);
+            } catch (_) {}
+            b.free();
+          }
+          pushed = true;
+        } catch (_) {}
+        if (!pushed) {
+          walker.free();
+          r.free();
+          return [];
+        }
       }
     } catch (_) {
       try {
-        walker.push(r.head.target);
+        _withHeadOid(r, walker.push);
       } catch (_) {
         walker.free();
         r.free();
@@ -383,10 +494,7 @@ class RealGitService implements GitService {
       }
     }
 
-    String? headSha;
-    try {
-      headSha = r.head.target.sha;
-    } catch (_) {}
+    final headSha = _headSha(r);
 
     final refsMap = <String, List<RefEntity>>{};
     try {
@@ -452,12 +560,7 @@ class RealGitService implements GitService {
   Future<CommitEntity> getCommit(GitRepo repo, String sha) async {
     final r = Repository.open(repo.path);
     final commit = Commit.lookup(repo: r, oid: Oid.fromSHA(r, sha));
-
-    String? headSha;
-    try {
-      headSha = r.head.target.sha;
-    } catch (_) {}
-
+    final headSha = _headSha(r);
     final entity = _mapCommit(commit, isHead: sha == headSha);
     commit.free();
     r.free();
@@ -486,7 +589,7 @@ class RealGitService implements GitService {
 
     final parents = <Commit>[];
     try {
-      parents.add(Commit.lookup(repo: r, oid: r.head.target));
+      parents.add(_withHeadOid(r, (oid) => Commit.lookup(repo: r, oid: oid)));
     } catch (_) {}
 
     final commitOid = Commit.create(
@@ -622,7 +725,7 @@ class RealGitService implements GitService {
   Future<void> unstageFile(GitRepo repo, String path) async {
     final r = Repository.open(repo.path);
     try {
-      r.resetDefault(oid: r.head.target, pathspec: [path]);
+      _withHeadOid(r, (oid) => r.resetDefault(oid: oid, pathspec: [path]));
     } catch (_) {}
     r.free();
   }
@@ -644,7 +747,7 @@ class RealGitService implements GitService {
   Future<void> unstageAll(GitRepo repo) async {
     final r = Repository.open(repo.path);
     try {
-      r.resetDefault(oid: r.head.target, pathspec: ['*']);
+      _withHeadOid(r, (oid) => r.resetDefault(oid: oid, pathspec: ['*']));
     } catch (_) {}
     r.free();
   }
@@ -697,9 +800,15 @@ class RealGitService implements GitService {
     Diff diff;
     if (staged) {
       try {
-        final headCommit = Commit.lookup(repo: r, oid: r.head.target);
-        diff = Diff.treeToIndex(repo: r, tree: headCommit.tree, index: index);
-        headCommit.free();
+        final headCommit = _withHeadOid(
+          r,
+          (oid) => Commit.lookup(repo: r, oid: oid),
+        );
+        try {
+          diff = Diff.treeToIndex(repo: r, tree: headCommit.tree, index: index);
+        } finally {
+          headCommit.free();
+        }
       } catch (_) {
         // Initial repository, diff against empty index
         diff = Diff.indexToWorkdir(repo: r, index: index);
@@ -1182,31 +1291,31 @@ class RealGitService implements GitService {
     final tags = <TagEntity>[];
     try {
       for (final tagName in r.tags) {
+        final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
         try {
-          final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
-          final targetOid = ref.target;
-          ref.free();
-
-          final tag = Tag.lookup(repo: r, oid: targetOid);
-          tags.add(TagEntity(
-            name: tag.name,
-            sha: tag.targetOid.sha,
-            message: tag.message,
-            isAnnotated: true,
-          ));
-          tag.free();
-        } catch (_) {
-          // Lightweight tag
+          // Annotated tags peel to a Tag object; lightweight tags point at a commit.
           try {
-            final ref = Reference.lookup(repo: r, name: 'refs/tags/$tagName');
+            final tag = Tag.lookup(repo: r, oid: ref.target);
+            try {
+              tags.add(TagEntity(
+                name: tag.name,
+                sha: tag.targetOid.sha,
+                message: tag.message,
+                isAnnotated: true,
+              ));
+            } finally {
+              tag.free();
+            }
+          } catch (_) {
             tags.add(TagEntity(
               name: tagName,
               sha: ref.target.sha,
               message: null,
               isAnnotated: false,
             ));
-            ref.free();
-          } catch (_) {}
+          }
+        } finally {
+          ref.free();
         }
       }
     } catch (_) {}
@@ -1222,58 +1331,73 @@ class RealGitService implements GitService {
     String? message,
   }) async {
     final r = Repository.open(repo.path);
-    final targetOid = target != null 
-        ? Oid.fromSHA(r, target) 
-        : r.head.target;
-        
-    if (message != null) {
-      final signature = Signature.create(
-        name: 'Furcate User',
-        email: 'user@furcate.app',
-        time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      );
-      Tag.createAnnotated(
-        repo: r,
-        tagName: name,
-        target: targetOid,
-        targetType: GitObject.commit,
-        tagger: signature,
-        message: message,
-        force: true,
-      );
-    } else {
-      Tag.createLightweight(
-        repo: r,
-        tagName: name,
-        target: targetOid,
-        targetType: GitObject.commit,
-        force: true,
-      );
-    }
-    
-    final ref = Reference.lookup(repo: r, name: 'refs/tags/$name');
-    final tagOid = ref.target;
-    ref.free();
-    
+    Reference? headRef;
     try {
-      final tag = Tag.lookup(repo: r, oid: tagOid);
-      final entity = TagEntity(
-        name: tag.name,
-        sha: tag.targetOid.sha,
-        message: tag.message,
-        isAnnotated: true,
-      );
-      tag.free();
+      final Oid targetOid;
+      if (target != null) {
+        targetOid = Oid.fromSHA(r, target);
+      } else {
+        headRef = r.head;
+        targetOid = headRef.target;
+      }
+
+      if (message != null) {
+        final signature = Signature.create(
+          name: 'Furcate User',
+          email: 'user@furcate.app',
+          time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+        try {
+          Tag.createAnnotated(
+            repo: r,
+            tagName: name,
+            target: targetOid,
+            targetType: GitObject.commit,
+            tagger: signature,
+            message: message,
+            force: true,
+          );
+        } finally {
+          signature.free();
+        }
+      } else {
+        Tag.createLightweight(
+          repo: r,
+          tagName: name,
+          target: targetOid,
+          targetType: GitObject.commit,
+          force: true,
+        );
+      }
+
+      final ref = Reference.lookup(repo: r, name: 'refs/tags/$name');
+      try {
+        try {
+          final tag = Tag.lookup(repo: r, oid: ref.target);
+          try {
+            return TagEntity(
+              name: tag.name,
+              sha: tag.targetOid.sha,
+              message: tag.message,
+              isAnnotated: true,
+            );
+          } finally {
+            tag.free();
+          }
+        } catch (_) {
+          return TagEntity(
+            name: name,
+            sha: ref.target.sha,
+            message: null,
+            isAnnotated: false,
+          );
+        }
+      } finally {
+        ref.free();
+      }
+    } finally {
+      headRef?.free();
       r.free();
-      return entity;
-    } catch (_) {
-      r.free();
-      return TagEntity(
-        name: name,
-        sha: tagOid.sha,
-        message: null,
-        isAnnotated: false,
-      );
     }
   }
 
@@ -1319,24 +1443,27 @@ class RealGitService implements GitService {
       email: 'user@furcate.app',
       time: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
-    final flags = {
-      GitStash.defaults,
-      if (includeUntracked) GitStash.includeUntracked,
-    };
-    final oid = Stash.create(
-      repo: r,
-      stasher: signature,
-      message: message,
-      flags: flags,
-    );
-    final entity = StashEntity(
-      index: 0,
-      message: message ?? 'Stash',
-      sha: oid.sha,
-      dateTime: DateTime.now(),
-    );
-    r.free();
-    return entity;
+    try {
+      final flags = {
+        GitStash.defaults,
+        if (includeUntracked) GitStash.includeUntracked,
+      };
+      final oid = Stash.create(
+        repo: r,
+        stasher: signature,
+        message: message,
+        flags: flags,
+      );
+      return StashEntity(
+        index: 0,
+        message: message ?? 'Stash',
+        sha: oid.sha,
+        dateTime: DateTime.now(),
+      );
+    } finally {
+      signature.free();
+      r.free();
+    }
   }
 
   @override
@@ -1503,19 +1630,20 @@ class RealGitService implements GitService {
     final list = <String>[];
     Commit? commit;
     Tree? tree;
+    Reference? headRef;
     final subTrees = <Tree>[];
     try {
-      Oid commitOid;
+      final Oid commitOid;
       if (ref != null) {
         commitOid = Oid.fromSHA(r, ref);
       } else {
-        final headRef = r.head;
+        // Keep headRef alive until after Commit.lookup — Oid points into the ref.
+        headRef = r.head;
         commitOid = headRef.target;
-        headRef.free();
       }
       commit = Commit.lookup(repo: r, oid: commitOid);
       tree = commit.tree;
-      
+
       void traverse(Tree t, String currentPath) {
         for (var i = 0; i < t.length; i++) {
           final entry = t[i];
@@ -1529,9 +1657,11 @@ class RealGitService implements GitService {
           }
         }
       }
-      
+
       traverse(tree, '');
-    } catch (_) {} finally {
+    } catch (_) {
+      // Empty / unborn HEAD → no files.
+    } finally {
       for (final st in subTrees) {
         try {
           st.free();
@@ -1539,10 +1669,15 @@ class RealGitService implements GitService {
       }
       tree?.free();
       commit?.free();
+      headRef?.free();
       r.free();
     }
     return list;
   }
+
+  /// Maximum size (bytes) of a file that can be loaded into the in-app editor.
+  /// Larger / binary files are rejected so Android bare-repo edits stay safe.
+  static const int maxEditableFileBytes = 1 * 1024 * 1024;
 
   @override
   Future<String> getFileContentAtRef(GitRepo repo, String path, {String? ref}) async {
@@ -1550,25 +1685,45 @@ class RealGitService implements GitService {
     Commit? commit;
     Tree? tree;
     Blob? blob;
+    Reference? headRef;
     final openTrees = <Tree>[];
     try {
-      Oid commitOid;
+      final Oid commitOid;
       if (ref != null) {
         commitOid = Oid.fromSHA(r, ref);
       } else {
-        final headRef = r.head;
+        // Keep headRef alive until after Commit.lookup — Oid points into the ref.
+        headRef = r.head;
         commitOid = headRef.target;
-        headRef.free();
       }
       commit = Commit.lookup(repo: r, oid: commitOid);
       tree = commit.tree;
-      
+
       final entry = _findEntryByPath(r, tree, path, openTrees);
-      if (entry != null && entry.type == GitObject.blob) {
-        blob = entry.toObject(r) as Blob;
-        return blob.content;
+      if (entry == null || entry.type != GitObject.blob) {
+        throw GitException(
+          'cat-file $path',
+          1,
+          'File not found at revision: $path',
+        );
       }
-    } catch (_) {} finally {
+      blob = entry.toObject(r) as Blob;
+      if (blob.isBinary) {
+        throw GitException(
+          'cat-file $path',
+          1,
+          'Binary files cannot be edited in Furcate.',
+        );
+      }
+      if (blob.size > maxEditableFileBytes) {
+        throw GitException(
+          'cat-file $path',
+          1,
+          'File is too large to edit (${blob.size} bytes; limit $maxEditableFileBytes).',
+        );
+      }
+      return blob.content;
+    } finally {
       blob?.free();
       for (final t in openTrees) {
         try {
@@ -1577,9 +1732,9 @@ class RealGitService implements GitService {
       }
       tree?.free();
       commit?.free();
+      headRef?.free();
       r.free();
     }
-    return '';
   }
 
   TreeEntry? _findEntryByPath(Repository repo, Tree rootTree, String path, List<Tree> openTrees) {
@@ -1629,10 +1784,13 @@ class RealGitService implements GitService {
       final newBlobOid = Blob.create(repo: r, content: content);
       
       if (!r.isEmpty) {
-        final headRef = r.head;
-        headCommit = Commit.lookup(repo: r, oid: headRef.target);
-        headRef.free();
-        rootTree = headCommit.tree;
+        // Lookup while HEAD ref is still alive (Oid points into the ref).
+        final parent = _withHeadOid(
+          r,
+          (oid) => Commit.lookup(repo: r, oid: oid),
+        );
+        headCommit = parent;
+        rootTree = parent.tree;
       }
       
       final pathParts = path.split('/');

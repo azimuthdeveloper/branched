@@ -82,8 +82,22 @@ class RepositoryBloc extends Bloc<RepositoryEvent, RepositoryState> {
 
   Future<void> _loadRepoInfo(GitRepo repo, Emitter<RepositoryState> emit) async {
     final currentBranch = await _gitService.getCurrentBranch(repo);
-    final history = await _gitService.getCommitHistory(repo, branch: currentBranch.name, limit: 1);
-    final headCommit = history.isNotEmpty ? history.first : null;
+    // Prefer short name for history walks — full refs/heads/* is also accepted,
+    // but short name matches how branch filters are passed elsewhere.
+    final branchHint = currentBranch.shortName.isNotEmpty
+        ? currentBranch.shortName
+        : currentBranch.name;
+    CommitEntity? headCommit;
+    try {
+      final history = await _gitService.getCommitHistory(
+        repo,
+        branch: branchHint,
+        limit: 1,
+      );
+      headCommit = history.isNotEmpty ? history.first : null;
+    } catch (_) {
+      // Unborn / empty repo — still emit Loaded so the rest of the UI works.
+    }
     final status = await _gitService.getStatus(repo);
 
     emit(RepositoryLoaded(

@@ -123,9 +123,14 @@ class RepositoryManagerBloc extends Bloc<RepositoryManagerEvent, RepositoryManag
 
   RepositoryManagerBloc(this._gitService) : super(const RepositoryManagerState()) {
     on<LoadRecentReposEvent>((event, emit) async {
-      final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getStringList(_recentReposKey) ?? [];
-      emit(state.copyWith(recentRepos: saved, error: null));
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final saved = prefs.getStringList(_recentReposKey) ?? [];
+        emit(state.copyWith(recentRepos: saved, error: null));
+      } catch (_) {
+        // SharedPreferences unavailable (e.g. unit tests without plugin binding).
+        emit(state.copyWith(recentRepos: const [], error: null));
+      }
     });
 
     on<OpenRepositoryEvent>((event, emit) async {
@@ -247,7 +252,11 @@ class RepositoryManagerBloc extends Bloc<RepositoryManagerEvent, RepositoryManag
   }
 
   Future<void> _persistRecentRepos(List<String> recentRepos) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_recentReposKey, recentRepos);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_recentReposKey, recentRepos);
+    } catch (_) {
+      // Never fail open/clone/init because preferences persistence failed.
+    }
   }
 }

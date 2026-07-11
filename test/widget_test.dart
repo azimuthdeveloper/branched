@@ -1,9 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:branched/main.dart';
 import 'package:branched/core/locator.dart';
 
 void main() {
   setUpAll(() {
+    SharedPreferences.setMockInitialValues({});
     setupLocator();
   });
 

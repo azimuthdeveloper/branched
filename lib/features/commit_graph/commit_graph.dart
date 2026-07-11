@@ -13,7 +13,9 @@ import 'commit_graph_bloc.dart';
 import 'commit_graph_painter.dart';
 
 class CommitGraphWidget extends StatefulWidget {
-  const CommitGraphWidget({super.key});
+  final GitRepo repo;
+
+  const CommitGraphWidget({super.key, required this.repo});
 
   @override
   State<CommitGraphWidget> createState() => _CommitGraphWidgetState();
@@ -73,9 +75,9 @@ class _CommitGraphWidgetState extends State<CommitGraphWidget> {
     ).then((value) async {
       if (value == null) return;
 
-      final repoState = context.read<RepositoryBloc>().state;
-      if (repoState is! RepositoryLoaded) return;
-      final repo = repoState.repo;
+      // Use the workspace repo handle — do not depend on RepositoryBloc
+      // having finished loading (context menus used to silently no-op).
+      final repo = widget.repo;
       final gitService = locator<GitService>();
 
       try {

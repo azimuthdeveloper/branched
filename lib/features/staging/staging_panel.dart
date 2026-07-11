@@ -382,18 +382,32 @@ class _StagingPanelState extends State<StagingPanel> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
-          Text(
-            '$title ($count)',
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: FurcateTheme.darkTextSecondary),
+          Expanded(
+            child: Text(
+              '$title ($count)',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: FurcateTheme.darkTextSecondary,
+              ),
+            ),
           ),
-          const Spacer(),
           if (count > 0)
             TextButton(
               onPressed: onAction,
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               child: Text(
                 actionText,
-                style: const TextStyle(fontSize: 10, color: FurcateTheme.darkAccent, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: FurcateTheme.darkAccent,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
         ],

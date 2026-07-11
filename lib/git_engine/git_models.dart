@@ -16,6 +16,17 @@ class AuthorEntity extends Equatable {
   List<Object?> get props => [name, email];
 }
 
+/// Username/password (or PAT) pair supplied by the user for remote auth.
+class GitAuthCredentials extends Equatable {
+  final String username;
+  final String password;
+
+  const GitAuthCredentials({required this.username, required this.password});
+
+  @override
+  List<Object?> get props => [username, password];
+}
+
 class RefEntity extends Equatable {
   final String name;
   final String type; // 'local', 'remote', 'tag'

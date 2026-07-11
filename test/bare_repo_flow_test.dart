@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
-import 'package:branched/git_engine/git_service.dart';
 import 'package:branched/git_engine/git_service_impl.dart';
 
 void main() {

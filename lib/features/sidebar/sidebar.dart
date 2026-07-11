@@ -935,10 +935,24 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                 ),
               ),
             ),
+            if ((branch.ahead ?? 0) > 0 || (branch.behind ?? 0) > 0) ...[
+              const SizedBox(width: 4),
+              Text(
+                [
+                  if ((branch.ahead ?? 0) > 0) '↑${branch.ahead}',
+                  if ((branch.behind ?? 0) > 0) '↓${branch.behind}',
+                ].join(' '),
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: FurcateTheme.darkTextSecondary,
+                ),
+              ),
+            ],
             if (branch.isHead)
               Container(
                 width: 6,
                 height: 6,
+                margin: const EdgeInsets.only(left: 4),
                 decoration: const BoxDecoration(
                   color: FurcateTheme.darkAccent,
                   shape: BoxShape.circle,

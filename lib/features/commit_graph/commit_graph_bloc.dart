@@ -102,11 +102,22 @@ class CommitGraphBloc extends Bloc<CommitGraphEvent, CommitGraphState> {
         return;
       }
 
-      final filtered = state.allCommits.where((gc) {
-        return gc.commit.message.toLowerCase().contains(query) ||
-            gc.commit.sha.toLowerCase().contains(query) ||
-            gc.commit.author.name.toLowerCase().contains(query);
-      }).toList();
+      // Flatten search hits: a filtered subset cannot reuse full-graph edges.
+      final filtered = state.allCommits
+          .where((gc) {
+            return gc.commit.message.toLowerCase().contains(query) ||
+                gc.commit.sha.toLowerCase().contains(query) ||
+                gc.commit.author.name.toLowerCase().contains(query);
+          })
+          .map(
+            (gc) => GraphCommit(
+              commit: gc.commit,
+              laneIndex: 0,
+              connections: const [],
+              colorIndex: 0,
+            ),
+          )
+          .toList();
 
       emit(state.copyWith(visibleCommits: filtered, searchQuery: event.query));
     });

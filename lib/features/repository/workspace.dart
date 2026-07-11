@@ -130,8 +130,8 @@ class _MainWorkspaceState extends State<MainWorkspace> {
     return Column(
       children: [
         // Commit History Graph Panel
-        const Expanded(
-          child: CommitGraphWidget(),
+        Expanded(
+          child: CommitGraphWidget(repo: repo),
         ),
 
         // Draggable Horizontal Splitter
